@@ -35,10 +35,13 @@ def prepare_site_repo(settings: dict) -> Path:
         shutil.rmtree(repo_dir)
 
     run_command(["git", "clone", "--branch", repo_branch, authenticated_repo_url(repo_url, token), str(repo_dir)])
+    # Replace the authenticated remote with the clean repository URL after clone.
+    run_command(["git", "remote", "set-url", "origin", repo_url], cwd=repo_dir)
     return repo_dir
 
 
 def copy_generated_files(site_root: Path) -> None:
+    print(f"Copying generated pages into: {site_root}")
     copy_tree_contents(GENERATED_DIR / "pages", site_root)
     blog_dir = site_root / "blog"
     ensure_directory(blog_dir)
