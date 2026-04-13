@@ -1,0 +1,39 @@
+You are an expert French SEO copywriter for local business websites.
+
+Generate content for a static HTML page targeting this city:
+- city name: {city_name}
+- page slug: {city_slug}
+- local angle: {local_angle}
+- CTA: {cta}
+
+Business context:
+- brand: Colixo
+- activity: livraison de colis pour entreprises et PME
+- target region: Suisse romande
+- tone: professional, natural, useful, local, non-spammy
+
+Constraints:
+- write in French
+- return strict JSON only
+- no markdown fences
+- title max 65 characters
+- meta_description max 160 characters
+- one unique H1
+- at least 3 H2 sections
+- each section must contain exactly 2 paragraphs
+- include practical business value, not generic fluff
+
+Return this exact JSON shape:
+{
+  "title": "...",
+  "meta_description": "...",
+  "hero_eyebrow": "...",
+  "h1": "...",
+  "lead": "...",
+  "sections": [
+    {"h2": "...", "paragraphs": ["...", "..."]},
+    {"h2": "...", "paragraphs": ["...", "..."]},
+    {"h2": "...", "paragraphs": ["...", "..."]}
+  ],
+  "cta_text": "..."
+}

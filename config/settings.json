@@ -1,0 +1,56 @@
+{
+  "openai_model": "gpt-5.4-mini",
+  "site_base_url": "https://www.colixo.ch",
+  "site_repo_url": "https://github.com/vdiclub-dev/colixo-site.git",
+  "site_repo_branch": "main",
+  "site_repo_local_dir": "colixo-site",
+  "commit_message": "chore: refresh SEO pages and sitemap",
+  "git_author_name": "Colixo SEO Bot",
+  "git_author_email": "seo-bot@colixo.ch",
+  "cities": [
+    {
+      "name": "Genève",
+      "slug": "livraison-geneve",
+      "local_angle": "service de livraison de colis pour entreprises genevoises, bureaux, commerces et structures multi-sites",
+      "cta_text": "Demander un devis à Genève"
+    },
+    {
+      "name": "Lausanne",
+      "slug": "livraison-lausanne",
+      "local_angle": "livraison locale et express pour PME lausannoises, bureaux et sociétés de services",
+      "cta_text": "Être contacté à Lausanne"
+    },
+    {
+      "name": "Fribourg",
+      "slug": "livraison-fribourg",
+      "local_angle": "collecte et livraison pour entreprises fribourgeoises avec contraintes régionales",
+      "cta_text": "Demander un devis à Fribourg"
+    },
+    {
+      "name": "Neuchâtel",
+      "slug": "livraison-neuchatel",
+      "local_angle": "solution de livraison de colis pour PME et commerces neuchâtelois",
+      "cta_text": "Être contacté à Neuchâtel"
+    },
+    {
+      "name": "Valais",
+      "slug": "livraison-valais",
+      "local_angle": "livraison régionale pour entreprises valaisannes avec besoins réguliers et express",
+      "cta_text": "Demander un devis en Valais"
+    }
+  ],
+  "articles": [
+    {
+      "slug": "livraison-express-geneve",
+      "title_hint": "Livraison express à Genève : ce qu’une entreprise doit vraiment regarder",
+      "search_angle": "comment choisir un service de livraison express à Genève pour une entreprise",
+      "cta_text": "Être contacté pour Genève"
+    },
+    {
+      "slug": "reduire-couts-expedition-suisse-romande",
+      "title_hint": "Réduire ses coûts d’expédition en Suisse romande sans dégrader le service",
+      "search_angle": "réduire les coûts d’expédition pour une PME en Suisse romande",
+      "cta_text": "Demander un devis Colixo"
+    }
+  ]
+}
