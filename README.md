@@ -44,10 +44,12 @@ python scripts/run_seo_pipeline.py
 
 ## Workflow GitHub Actions
 
-Le workflow `.github/workflows/seo.yml` :
+Le workflow d'exemple `.github/workflows/seo.yml.example` :
 
 - tourne chaque semaine
 - peut aussi être lancé à la main
 - génère les pages et articles
 - met à jour le sitemap
 - pousse automatiquement les changements dans `colixo-site`
+
+Quand votre token GitHub dispose du scope `workflow`, renommez ce fichier en `.github/workflows/seo.yml`.
