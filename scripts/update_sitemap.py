@@ -6,12 +6,33 @@ from pathlib import Path
 from common import load_settings, write_text
 
 
+PRIORITY_PAGES = {
+    "index.html",
+    "contact.html",
+    "tarifs.html",
+    "livraison-geneve.html",
+    "livraison-lausanne.html",
+    "livraison-fribourg.html",
+    "livraison-neuchatel.html",
+    "livraison-valais.html",
+    "livraison-ecommerce.html",
+    "livraison-pharmacies.html",
+    "livraison-garages.html",
+    "livraison-entreprise.html",
+    "livraison-express.html",
+    "transport-colis.html",
+    "blog/index.html",
+    "blog/livraison-express-geneve.html",
+    "blog/reduire-couts-expedition-suisse-romande.html",
+}
+
+
 def url_from_path(path: Path, site_root: Path, base_url: str) -> str:
     relative = path.relative_to(site_root).as_posix()
     if relative == "index.html":
         return f"{base_url}/"
     if relative.endswith("/index.html"):
-        return f"{base_url}/{relative[:-10]}/"
+        return f"{base_url}/{relative[:-11]}/"
     return f"{base_url}/{relative}"
 
 
@@ -20,7 +41,7 @@ def build_sitemap(site_root: Path, base_url: str) -> str:
     urls = [
         f"  <url><loc>{url_from_path(path, site_root, base_url)}</loc></url>"
         for path in html_files
-        if ".git" not in path.parts
+        if ".git" not in path.parts and path.relative_to(site_root).as_posix() in PRIORITY_PAGES
     ]
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'

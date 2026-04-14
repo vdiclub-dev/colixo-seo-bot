@@ -1,4 +1,11 @@
 {
+  "brand_name": "Colixo",
+  "site_url": "https://colixo.ch",
+  "language": "fr",
+  "target_region": "Suisse romande",
+  "positioning": "Solution moderne de livraison pour entreprises et professionnels en Suisse romande",
+  "main_cta": "Demander un devis",
+  "secondary_cta": "Être contacté",
   "openai_model": "gpt-5.4-mini",
   "site_base_url": "https://www.colixo.ch",
   "site_repo_url": "https://github.com/vdiclub-dev/colixo-site.git",
@@ -18,32 +25,250 @@
     {
       "name": "Genève",
       "slug": "livraison-geneve",
+      "raw_slug": "geneve",
+      "local_focus": [
+        "livraison rapide en zone urbaine",
+        "réactivité pour entreprises",
+        "flux importants",
+        "livraisons express"
+      ],
       "local_angle": "service de livraison de colis pour entreprises genevoises, bureaux, commerces et structures multi-sites",
       "cta_text": "Demander un devis à Genève"
     },
     {
       "name": "Lausanne",
       "slug": "livraison-lausanne",
+      "raw_slug": "lausanne",
+      "local_focus": [
+        "livraison pour PME",
+        "souplesse logistique",
+        "service local réactif",
+        "livraison professionnelle"
+      ],
       "local_angle": "livraison locale et express pour PME lausannoises, bureaux et sociétés de services",
       "cta_text": "Être contacté à Lausanne"
     },
     {
       "name": "Fribourg",
       "slug": "livraison-fribourg",
+      "raw_slug": "fribourg",
+      "local_focus": [
+        "service de proximité",
+        "livraisons régulières",
+        "accompagnement des commerces",
+        "souplesse régionale"
+      ],
       "local_angle": "collecte et livraison pour entreprises fribourgeoises avec contraintes régionales",
       "cta_text": "Demander un devis à Fribourg"
     },
     {
       "name": "Neuchâtel",
       "slug": "livraison-neuchatel",
+      "raw_slug": "neuchatel",
+      "local_focus": [
+        "livraison régionale efficace",
+        "service pour professionnels",
+        "gestion simple des expéditions",
+        "réactivité"
+      ],
       "local_angle": "solution de livraison de colis pour PME et commerces neuchâtelois",
       "cta_text": "Être contacté à Neuchâtel"
     },
     {
-      "name": "Valais",
-      "slug": "livraison-valais",
-      "local_angle": "livraison régionale pour entreprises valaisannes avec besoins réguliers et express",
-      "cta_text": "Demander un devis en Valais"
+      "name": "Sion",
+      "slug": "livraison-sion",
+      "raw_slug": "sion",
+      "local_focus": [
+        "livraison en Valais",
+        "souplesse sur les distances",
+        "service pour entreprises locales",
+        "gestion des délais"
+      ],
+      "local_angle": "livraison régionale pour entreprises à Sion avec besoins réguliers et express",
+      "cta_text": "Demander un devis à Sion"
+    },
+    {
+      "name": "Yverdon-les-Bains",
+      "slug": "livraison-yverdon",
+      "raw_slug": "yverdon",
+      "local_focus": [
+        "service régional",
+        "livraison pour PME",
+        "flux professionnels",
+        "logistique simple"
+      ],
+      "local_angle": "livraison locale pour PME et professionnels à Yverdon-les-Bains",
+      "cta_text": "Être contacté à Yverdon"
+    },
+    {
+      "name": "Montreux",
+      "slug": "livraison-montreux",
+      "raw_slug": "montreux",
+      "local_focus": [
+        "livraison pour commerces",
+        "souplesse locale",
+        "service professionnel",
+        "réactivité"
+      ],
+      "local_angle": "service de livraison pour commerces et entreprises à Montreux",
+      "cta_text": "Demander un devis à Montreux"
+    },
+    {
+      "name": "Nyon",
+      "slug": "livraison-nyon",
+      "raw_slug": "nyon",
+      "local_focus": [
+        "livraison rapide",
+        "service pour entreprises",
+        "liaisons régionales",
+        "souplesse logistique"
+      ],
+      "local_angle": "livraison rapide pour entreprises et professionnels à Nyon",
+      "cta_text": "Être contacté à Nyon"
+    }
+  ],
+  "sectors": [
+    {
+      "name": "PME",
+      "slug": "pme",
+      "needs": [
+        "réduction des coûts d’expédition",
+        "service simple",
+        "réactivité",
+        "souplesse"
+      ]
+    },
+    {
+      "name": "e-commerce",
+      "slug": "ecommerce",
+      "needs": [
+        "gestion de volume",
+        "expéditions régulières",
+        "souplesse",
+        "rapidité"
+      ]
+    },
+    {
+      "name": "pharmacies",
+      "slug": "pharmacies",
+      "needs": [
+        "fiabilité",
+        "rapidité",
+        "livraisons sensibles",
+        "ponctualité"
+      ]
+    },
+    {
+      "name": "garages",
+      "slug": "garages",
+      "needs": [
+        "livraison de pièces",
+        "urgence atelier",
+        "délais courts",
+        "réactivité"
+      ]
+    },
+    {
+      "name": "artisans",
+      "slug": "artisans",
+      "needs": [
+        "livraison ponctuelle",
+        "souplesse",
+        "gain de temps",
+        "service local"
+      ]
+    },
+    {
+      "name": "commerces",
+      "slug": "commerces",
+      "needs": [
+        "livraisons régulières",
+        "service fiable",
+        "souplesse",
+        "proximité"
+      ]
+    },
+    {
+      "name": "cabinets médicaux",
+      "slug": "cabinets-medicaux",
+      "needs": [
+        "confidentialité",
+        "fiabilité",
+        "documents urgents",
+        "ponctualité"
+      ]
+    },
+    {
+      "name": "fleuristes",
+      "slug": "fleuristes",
+      "needs": [
+        "rapidité",
+        "gestion des délais",
+        "service local",
+        "souplesse"
+      ]
+    },
+    {
+      "name": "boutiques locales",
+      "slug": "boutiques-locales",
+      "needs": [
+        "livraisons clients",
+        "souplesse",
+        "service de proximité",
+        "réactivité"
+      ]
+    },
+    {
+      "name": "pièces automobiles",
+      "slug": "pieces-automobiles",
+      "needs": [
+        "urgence",
+        "livraison rapide",
+        "continuité d’activité",
+        "service fiable"
+      ]
+    }
+  ],
+  "service_pages": [
+    {
+      "name": "livraison express",
+      "slug": "livraison-express",
+      "focus": [
+        "rapidité",
+        "livraison urgente",
+        "réactivité",
+        "solution professionnelle"
+      ]
+    },
+    {
+      "name": "livraison entreprise",
+      "slug": "livraison-entreprise",
+      "focus": [
+        "service B2B",
+        "souplesse",
+        "coûts optimisés",
+        "accompagnement"
+      ]
+    },
+    {
+      "name": "transport de colis",
+      "slug": "transport-colis",
+      "focus": [
+        "solution générale",
+        "livraison locale",
+        "professionnels",
+        "particuliers"
+      ]
+    },
+    {
+      "name": "solution logistique PME",
+      "slug": "solution-logistique-pme",
+      "focus": [
+        "régularité",
+        "simplicité",
+        "service adapté",
+        "gain de temps"
+      ]
     }
   ],
   "articles": [

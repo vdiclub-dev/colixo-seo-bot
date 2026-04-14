@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
+from typing import Any
 
-from common import GENERATED_DIR, bootstrap_env, generate_json_payload, load_prompt, load_settings, write_text
+from common import GENERATED_DIR, ROOT_DIR, bootstrap_env, generate_json_payload, load_prompt, load_settings, write_text
 
 
 PAGE_TEMPLATE = """<!DOCTYPE html>
@@ -68,6 +70,21 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
+OVERRIDES_DIR = ROOT_DIR / "page_overrides" / "pages"
+PRIORITY_PAGE_SLUGS = {
+    "livraison-geneve",
+    "livraison-lausanne",
+    "livraison-fribourg",
+    "livraison-neuchatel",
+    "livraison-valais",
+    "livraison-ecommerce",
+    "livraison-pharmacies",
+    "livraison-garages",
+    "livraison-entreprise",
+    "livraison-express",
+    "transport-colis",
+}
+
 
 def render_sections(sections: list[dict[str, object]]) -> str:
     parts: list[str] = []
@@ -78,29 +95,114 @@ def render_sections(sections: list[dict[str, object]]) -> str:
     return "".join(parts)
 
 
-def build_prompt(base_prompt: str, city: dict[str, str]) -> str:
+def build_prompt(base_prompt: str, replacements: dict[str, str]) -> str:
     prompt = base_prompt
-    replacements = {
-        "{city_name}": city["name"],
-        "{city_slug}": city["slug"],
-        "{local_angle}": city["local_angle"],
-        "{cta}": city["cta_text"],
-    }
     for placeholder, value in replacements.items():
         prompt = prompt.replace(placeholder, value)
     return prompt
+
+
+def format_focus_points(values: list[str]) -> str:
+    if not values:
+        return "service fiable, réactivité, simplicité, accompagnement"
+    return ", ".join(values)
+
+
+def sector_page_slug(sector: dict[str, Any]) -> str:
+    raw_slug = str(sector["slug"])
+    return raw_slug if raw_slug.startswith("livraison-") else f"livraison-{raw_slug}"
+
+
+def mark_secondary_page(html: str, slug: str) -> str:
+    if slug in PRIORITY_PAGE_SLUGS:
+        return html
+    return html.replace(
+        "<body>\n",
+        "<body>\n  <!-- Secondary SEO page kept out of primary navigation to limit duplication risk. -->\n",
+        1,
+    )
+
+
+def build_page_specs(settings: dict[str, Any]) -> list[dict[str, str]]:
+    specs: list[dict[str, str]] = []
+
+    for city in settings.get("cities", []):
+        specs.append(
+            {
+                "page_type": "city",
+                "target_name": city["name"],
+                "page_slug": city["slug"],
+                "target_region": settings.get("target_region", "Suisse romande"),
+                "positioning": settings.get("positioning", ""),
+                "specific_angle": city.get("local_angle", ""),
+                "focus_points": format_focus_points(city.get("local_focus", [])),
+                "cta": city.get("cta_text", settings.get("main_cta", "Demander un devis")),
+            }
+        )
+
+    for sector in settings.get("sectors", []):
+        specs.append(
+            {
+                "page_type": "sector",
+                "target_name": sector["name"],
+                "page_slug": sector_page_slug(sector),
+                "target_region": settings.get("target_region", "Suisse romande"),
+                "positioning": settings.get("positioning", ""),
+                "specific_angle": f"solution de livraison adaptée au secteur {sector['name']}",
+                "focus_points": format_focus_points(sector.get("needs", [])),
+                "cta": settings.get("main_cta", "Demander un devis"),
+            }
+        )
+
+    for service_page in settings.get("service_pages", []):
+        specs.append(
+            {
+                "page_type": "service",
+                "target_name": service_page["name"],
+                "page_slug": service_page["slug"],
+                "target_region": settings.get("target_region", "Suisse romande"),
+                "positioning": settings.get("positioning", ""),
+                "specific_angle": f"page de service dédiée à {service_page['name']}",
+                "focus_points": format_focus_points(service_page.get("focus", [])),
+                "cta": settings.get("secondary_cta", settings.get("main_cta", "Être contacté")),
+            }
+        )
+
+    return specs
 
 
 def generate_pages() -> None:
     bootstrap_env()
     settings = load_settings()
     company = settings.get("company", {})
-    prompt_template = load_prompt("seo_page.txt")
+    prompt_template = load_prompt("landing_page.txt")
     output_dir = GENERATED_DIR / "pages"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for city in settings["cities"]:
-        payload = generate_json_payload(build_prompt(prompt_template, city), settings)
+    for page in build_page_specs(settings):
+        override_path = OVERRIDES_DIR / f"{page['page_slug']}.html"
+        if override_path.exists():
+            write_text(output_dir / override_path.name, override_path.read_text(encoding="utf-8"))
+            print(f"Copied override page: {override_path.name}")
+            continue
+
+        payload = generate_json_payload(
+            build_prompt(
+                prompt_template,
+                {
+                    "{page_type}": page["page_type"],
+                    "{target_name}": page["target_name"],
+                    "{page_slug}": page["page_slug"],
+                    "{target_region}": page["target_region"],
+                    "{positioning}": page["positioning"],
+                    "{specific_angle}": page["specific_angle"],
+                    "{focus_points}": page["focus_points"],
+                    "{cta}": page["cta"],
+                    "{brand_name}": settings.get("brand_name", "Colixo"),
+                },
+            ),
+            settings,
+        )
         html = PAGE_TEMPLATE.format(
             title=payload["title"],
             meta_description=payload["meta_description"],
@@ -115,11 +217,12 @@ def generate_pages() -> None:
             company_address_line_1=company.get("address_line_1", "Suisse romande"),
             company_address_line_2=company.get("address_line_2", ""),
         )
-        write_text(output_dir / f"{city['slug']}.html", html)
-        print(f"Generated page: {city['slug']}.html")
+        html = mark_secondary_page(html, page["page_slug"])
+        write_text(output_dir / f"{page['page_slug']}.html", html)
+        print(f"Generated {page['page_type']} page: {page['page_slug']}.html")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate SEO city pages for colixo-site.")
+    parser = argparse.ArgumentParser(description="Generate SEO pages for cities, sectors, and services.")
     parser.parse_args()
     generate_pages()
