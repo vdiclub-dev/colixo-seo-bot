@@ -74,12 +74,16 @@ def render_sections(sections: list[dict[str, object]]) -> str:
 
 
 def build_prompt(base_prompt: str, article: dict[str, str]) -> str:
-    return base_prompt.format(
-        article_title=article["title_hint"],
-        article_slug=article["slug"],
-        search_angle=article["search_angle"],
-        cta=article["cta_text"],
-    )
+    prompt = base_prompt
+    replacements = {
+        "{article_title}": article["title_hint"],
+        "{article_slug}": article["slug"],
+        "{search_angle}": article["search_angle"],
+        "{cta}": article["cta_text"],
+    }
+    for placeholder, value in replacements.items():
+        prompt = prompt.replace(placeholder, value)
+    return prompt
 
 
 def generate_articles() -> None:

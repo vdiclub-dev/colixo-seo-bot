@@ -79,12 +79,16 @@ def render_sections(sections: list[dict[str, object]]) -> str:
 
 
 def build_prompt(base_prompt: str, city: dict[str, str]) -> str:
-    return base_prompt.format(
-        city_name=city["name"],
-        city_slug=city["slug"],
-        local_angle=city["local_angle"],
-        cta=city["cta_text"],
-    )
+    prompt = base_prompt
+    replacements = {
+        "{city_name}": city["name"],
+        "{city_slug}": city["slug"],
+        "{local_angle}": city["local_angle"],
+        "{cta}": city["cta_text"],
+    }
+    for placeholder, value in replacements.items():
+        prompt = prompt.replace(placeholder, value)
+    return prompt
 
 
 def generate_pages() -> None:
