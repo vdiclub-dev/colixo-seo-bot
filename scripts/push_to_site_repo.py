@@ -29,14 +29,16 @@ def prepare_site_repo(settings: dict) -> Path:
     repo_branch = settings.get("site_repo_branch", "main")
     repo_dir = TMP_DIR / settings.get("site_repo_local_dir", "colixo-site")
     token = get_required_env("SITE_REPO_PAT")
+    push_url = authenticated_repo_url(repo_url, token)
 
     ensure_directory(TMP_DIR)
     if repo_dir.exists():
         shutil.rmtree(repo_dir)
 
-    run_command(["git", "clone", "--branch", repo_branch, authenticated_repo_url(repo_url, token), str(repo_dir)])
-    # Replace the authenticated remote with the clean repository URL after clone.
+    run_command(["git", "clone", "--branch", repo_branch, push_url, str(repo_dir)])
+    # Keep a clean fetch URL while preserving authenticated push access for CI runners.
     run_command(["git", "remote", "set-url", "origin", repo_url], cwd=repo_dir)
+    run_command(["git", "remote", "set-url", "--push", "origin", push_url], cwd=repo_dir)
     return repo_dir
 
 
