@@ -49,12 +49,12 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   <footer class="site-footer">
     <div class="container footer-grid">
       <div>
-        <strong>Colixo</strong>
+        <strong>{company_name}</strong>
         <p>Livraison de colis pour entreprises en Suisse romande.</p>
       </div>
       <div>
         <strong>Coordonnées</strong>
-        <p>contact@colixo.ch<br>+41 22 000 00 00<br>Suisse romande</p>
+        <p>{company_email}<br>{company_phone}<br>{company_address_line_1}<br>{company_address_line_2}</p>
       </div>
       <div>
         <strong>Navigation</strong>
@@ -94,6 +94,7 @@ def build_prompt(base_prompt: str, city: dict[str, str]) -> str:
 def generate_pages() -> None:
     bootstrap_env()
     settings = load_settings()
+    company = settings.get("company", {})
     prompt_template = load_prompt("seo_page.txt")
     output_dir = GENERATED_DIR / "pages"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -108,6 +109,11 @@ def generate_pages() -> None:
             lead=payload["lead"],
             sections_html=render_sections(payload["sections"]),
             cta_text=payload["cta_text"],
+            company_name=company.get("name", "Colixo"),
+            company_email=company.get("email", "contact@colixo.ch"),
+            company_phone=company.get("phone", "+41 22 000 00 00"),
+            company_address_line_1=company.get("address_line_1", "Suisse romande"),
+            company_address_line_2=company.get("address_line_2", ""),
         )
         write_text(output_dir / f"{city['slug']}.html", html)
         print(f"Generated page: {city['slug']}.html")

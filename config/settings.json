@@ -7,6 +7,13 @@
   "commit_message": "chore: refresh SEO pages and sitemap",
   "git_author_name": "Colixo SEO Bot",
   "git_author_email": "seo-bot@colixo.ch",
+  "company": {
+    "name": "Colixo.ch",
+    "email": "Didier.Gysling@colixo.ch",
+    "address_line_1": "Impasse des Griottes 3",
+    "address_line_2": "1462 Yvonand, Suisse",
+    "phone": "+41 79 870 04 88"
+  },
   "cities": [
     {
       "name": "Genève",
