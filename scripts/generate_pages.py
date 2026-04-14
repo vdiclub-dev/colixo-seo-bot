@@ -46,6 +46,15 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
         <p><a class="btn" href="contact.html">{cta_text}</a></p>
       </div>
     </section>
+
+    <section class="section section-alt">
+      <div class="container">
+        <h2>Pages utiles</h2>
+        <div class="city-grid">
+          {internal_links_html}
+        </div>
+      </div>
+    </section>
   </main>
 
   <footer class="site-footer">
@@ -121,6 +130,33 @@ def mark_secondary_page(html: str, slug: str) -> str:
         "<body>\n  <!-- Secondary SEO page kept out of primary navigation to limit duplication risk. -->\n",
         1,
     )
+
+
+def page_link(href: str, label: str) -> str:
+    return f'<a class="city-link" href="{href}">{label}</a>'
+
+
+def build_internal_links(page: dict[str, str]) -> str:
+    slug = page["page_slug"]
+    if page["page_type"] == "city":
+        links = [
+            page_link("livraison-lausanne.html" if slug != "livraison-lausanne" else "livraison-geneve.html", "Autre ville: Lausanne" if slug != "livraison-lausanne" else "Autre ville: Genève"),
+            page_link("livraison-ecommerce.html", "Métier: e-commerce"),
+            page_link("livraison-entreprise.html", "Service: livraison entreprise"),
+        ]
+    elif page["page_type"] == "sector":
+        links = [
+            page_link("livraison-geneve.html", "Ville: Genève"),
+            page_link("livraison-pharmacies.html" if slug != "livraison-pharmacies" else "livraison-garages.html", "Métier: pharmacies" if slug != "livraison-pharmacies" else "Métier: garages"),
+            page_link("livraison-express.html", "Service: livraison express"),
+        ]
+    else:
+        links = [
+            page_link("livraison-geneve.html", "Ville: Genève"),
+            page_link("livraison-ecommerce.html", "Métier: e-commerce"),
+            page_link("livraison-entreprise.html" if slug != "livraison-entreprise" else "transport-colis.html", "Service: livraison entreprise" if slug != "livraison-entreprise" else "Service: transport de colis"),
+        ]
+    return "\n          ".join(links)
 
 
 def build_page_specs(settings: dict[str, Any]) -> list[dict[str, str]]:
@@ -210,6 +246,7 @@ def generate_pages() -> None:
             h1=payload["h1"],
             lead=payload["lead"],
             sections_html=render_sections(payload["sections"]),
+            internal_links_html=build_internal_links(page),
             cta_text=payload["cta_text"],
             company_name=company.get("name", "Colixo"),
             company_email=company.get("email", "contact@colixo.ch"),
