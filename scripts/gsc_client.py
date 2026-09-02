@@ -19,6 +19,26 @@ class SearchRow:
     position: float
 
 
+def build_search_analytics_payload(
+    start_date: date,
+    end_date: date,
+    dimensions: Iterable[str],
+    row_limit: int = 25000,
+) -> dict[str, Any]:
+    dims = list(dimensions)
+    payload: dict[str, Any] = {
+        "startDate": start_date.isoformat(),
+        "endDate": end_date.isoformat(),
+        "type": "web",
+        "dataState": "final",
+        "rowLimit": row_limit,
+        "startRow": 0,
+    }
+    if dims:
+        payload["dimensions"] = dims
+    return payload
+
+
 def _credentials():
     from google.oauth2 import service_account
     raw = os.getenv("GSC_SERVICE_ACCOUNT_JSON", "").strip()
@@ -45,20 +65,13 @@ def query_search_analytics(
 ) -> list[SearchRow]:
     if not property_name:
         raise ValueError("property_name is required")
-    dims = list(dimensions)
     endpoint = (
         "https://www.googleapis.com/webmasters/v3/sites/"
         f"{quote(property_name, safe='')}/searchAnalytics/query"
     )
-    payload: dict[str, Any] = {
-        "startDate": start_date.isoformat(),
-        "endDate": end_date.isoformat(),
-        "dimensions": dims,
-        "type": "web",
-        "dataState": "final",
-        "rowLimit": row_limit,
-        "startRow": 0,
-    }
+    # Search Console property totals require a genuinely dimensionless query.
+    # Sending an empty dimensions array is not equivalent on every API version.
+    payload = build_search_analytics_payload(start_date, end_date, dimensions, row_limit)
     from google.auth.transport.requests import AuthorizedSession
 
     session = AuthorizedSession(_credentials())
