@@ -1,0 +1,48 @@
+name: Colixo SEO Agent v2 PR CI
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout SEO agent
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install v2 dependencies
+        run: pip install -r requirements-v2.txt
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Compile Python sources
+        run: >-
+          python -m py_compile
+          scripts/gsc_client.py
+          scripts/seo_agent_v2.py
+          scripts/run_seo_pipeline.py
+          scripts/push_to_site_repo.py
+
+      - name: Check patch whitespace
+        run: git diff --check "${{ github.event.pull_request.base.sha }}..HEAD"
+
+      - name: Verify production publishing remains disabled
+        run: |
+          if python scripts/push_to_site_repo.py; then
+            echo "Production publishing guard unexpectedly succeeded"
+            exit 1
+          fi
