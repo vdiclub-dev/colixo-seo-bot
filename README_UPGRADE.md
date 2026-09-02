@@ -37,7 +37,7 @@ The current SEO repository still contains a legacy publishing path aimed at an o
 - `.github/workflows/seo.yml` (replace the old scheduled workflow)
 - `.env.example` (replace and sanitize)
 
-## What the weekly report contains
+## What the report contains
 
 - branded vs non-branded clicks/impressions;
 - B2B and geographic query classification;
@@ -46,6 +46,12 @@ The current SEO repository still contains a legacy publishing path aimed at an o
 - homepage / robots / sitemap checks;
 - status checks for the 13 legacy URLs already seen in Search Console;
 - no automatic content publishing and no automatic backlinking.
+
+## Controlled activation
+
+The scheduled run is intentionally disabled in this version. After merge, configure the
+read-only `GSC_SERVICE_ACCOUNT_JSON` secret, run `workflow_dispatch` manually, and validate
+the real report. Enable the weekly schedule only through a separate reviewed pull request.
 
 ## Acceptance gate
 

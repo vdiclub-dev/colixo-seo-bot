@@ -35,6 +35,10 @@ def load_config() -> dict[str, Any]:
     return json.loads(config_path.read_text(encoding="utf-8"))
 
 
+def get_property_name(config: dict[str, Any]) -> str:
+    return os.getenv("GSC_PROPERTY", "").strip() or str(config["property"])
+
+
 def normalize(text: str) -> str:
     return " ".join(text.casefold().strip().split())
 
@@ -146,6 +150,21 @@ def aggregate(rows: list[SearchRow], config: dict[str, Any]) -> dict[str, float]
     return totals
 
 
+def select_opportunities(
+    scored: list[Opportunity], top_opportunities: int
+) -> tuple[list[Opportunity], list[Opportunity]]:
+    priorities = [
+        item
+        for item in scored
+        if item.classification in {"high_fit_b2b", "geo_relevant"} and item.score > 0
+    ]
+    watchlist = [item for item in scored if item.classification == "generic" and item.score > 0]
+    sort_key = lambda item: (item.score, item.impressions)
+    priorities.sort(key=sort_key, reverse=True)
+    watchlist.sort(key=sort_key, reverse=True)
+    return priorities[:top_opportunities], watchlist[:top_opportunities]
+
+
 def technical_checks(config: dict[str, Any]) -> list[dict[str, Any]]:
     base = config["site_base_url"].rstrip("/")
     targets = [
@@ -200,6 +219,7 @@ def render_report(
     end: date,
     totals: dict[str, float],
     opportunities: list[Opportunity],
+    watchlist: list[Opportunity],
     tech: list[dict[str, Any]],
 ) -> str:
     lines = [
@@ -223,7 +243,7 @@ def render_report(
             "",
         ]
 
-    lines += ["## Opportunités prioritaires", ""]
+    lines += ["## Opportunités commerciales prioritaires", ""]
     if not opportunities:
         lines.append("Aucune opportunité exploitable détectée sur la période.")
     else:
@@ -236,6 +256,21 @@ def render_report(
             lines.append(
                 f"| {idx} | {item.query} | {item.position:.1f} | {item.impressions:.0f} | "
                 f"{item.clicks:.0f} | {item.classification} | {rationale} |"
+            )
+
+    lines += ["", "## Requêtes génériques à surveiller", ""]
+    if not watchlist:
+        lines.append("Aucune requête générique à surveiller détectée sur la période.")
+    else:
+        lines += [
+            "| Requête | Position | Impressions | Clics | Score | Pourquoi |",
+            "|---|---:|---:|---:|---:|---|",
+        ]
+        for item in watchlist:
+            rationale = item.rationale.replace("|", "/")
+            lines.append(
+                f"| {item.query} | {item.position:.1f} | {item.impressions:.0f} | "
+                f"{item.clicks:.0f} | {item.score:.1f} | {rationale} |"
             )
 
     lines += ["", "## Contrôles techniques", ""]
@@ -265,15 +300,16 @@ def main() -> None:
     end = date.today() - timedelta(days=lag)
     start = end - timedelta(days=lookback - 1)
 
-    query_rows = query_search_analytics(config["property"], start, end, ["query"])
+    property_name = get_property_name(config)
+    query_rows = query_search_analytics(property_name, start, end, ["query"])
     totals = aggregate(query_rows, config)
     scored = [score_query(row, config) for row in query_rows]
-    opportunities = [item for item in scored if item.classification != "brand" and item.score > 0]
-    opportunities.sort(key=lambda item: (item.score, item.impressions), reverse=True)
-    opportunities = opportunities[: int(config.get("top_opportunities", 15))]
+    opportunities, watchlist = select_opportunities(
+        scored, int(config.get("top_opportunities", 15))
+    )
 
     tech = technical_checks(config)
-    report = render_report(start, end, totals, opportunities, tech)
+    report = render_report(start, end, totals, opportunities, watchlist, tech)
 
     reports_dir = ROOT / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
@@ -282,6 +318,7 @@ def main() -> None:
         "period": {"start": start.isoformat(), "end": end.isoformat()},
         "totals": totals,
         "opportunities": [asdict(item) for item in opportunities],
+        "watchlist": [asdict(item) for item in watchlist],
         "technical_checks": tech,
     }
     (reports_dir / "latest.json").write_text(
