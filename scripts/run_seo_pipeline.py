@@ -1,24 +1,23 @@
+"""Safe entrypoint for Colixo SEO Agent v2.
+
+The legacy pipeline generated pages and pushed directly to a site repository.
+V2 is intentionally read-only with respect to production: monitor, analyse, propose.
+"""
 from __future__ import annotations
 
 import subprocess
 import sys
 from pathlib import Path
 
-
-ROOT_DIR = Path(__file__).resolve().parents[1]
-
-
-def run_step(script_name: str) -> None:
-    script_path = ROOT_DIR / "scripts" / script_name
-    print(f"Running step: {script_name}")
-    subprocess.run([sys.executable, str(script_path)], cwd=ROOT_DIR, check=True)
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> None:
-    run_step("generate_pages.py")
-    run_step("generate_articles.py")
-    run_step("push_to_site_repo.py")
-    print("SEO pipeline completed.")
+    subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "seo_agent_v2.py")],
+        cwd=ROOT,
+        check=True,
+    )
 
 
 if __name__ == "__main__":
