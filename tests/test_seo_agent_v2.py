@@ -10,6 +10,7 @@ from scripts.seo_agent_v2 import (
     exact_brand_query,
     get_property_name,
     property_totals,
+    render_report,
     score_query,
     select_opportunities,
     unattributed_metrics,
@@ -72,8 +73,56 @@ def test_unattributed_metrics_are_not_added_to_brand_or_nonbrand():
         {"total_clicks": 40, "total_impressions": 210, "ctr": 0.0, "position": 0.0},
         visible,
     )
-    assert unattributed == {"unattributed_clicks": 10, "unattributed_impressions": 30}
+    assert unattributed == {
+        "raw_unattributed_clicks": 10,
+        "raw_unattributed_impressions": 30,
+        "unattributed_clicks": 10,
+        "unattributed_impressions": 30,
+        "aggregation_inconsistency": False,
+    }
     assert visible["brand_clicks"] + visible["nonbrand_clicks"] == 30
+
+
+def test_unattributed_clicks_are_clamped_when_visible_exceeds_property():
+    result = unattributed_metrics(
+        {"total_clicks": 5, "total_impressions": 100, "ctr": 0.0, "position": 0.0},
+        {"visible_query_clicks": 7, "visible_query_impressions": 90},
+    )
+    assert result["raw_unattributed_clicks"] == -2
+    assert result["unattributed_clicks"] == 0
+    assert result["aggregation_inconsistency"] is True
+
+
+def test_unattributed_impressions_are_clamped_when_visible_exceeds_property():
+    result = unattributed_metrics(
+        {"total_clicks": 5, "total_impressions": 80, "ctr": 0.0, "position": 0.0},
+        {"visible_query_clicks": 4, "visible_query_impressions": 90},
+    )
+    assert result["raw_unattributed_impressions"] == -10
+    assert result["unattributed_impressions"] == 0
+    assert result["aggregation_inconsistency"] is True
+
+
+def test_report_never_displays_negative_unattributed_values():
+    visible = aggregate_visible_queries([row("colixo", 90, 2, 7)], CONFIG)
+    all_totals = {"total_clicks": 5, "total_impressions": 80, "ctr": 0.1, "position": 2.0}
+    unattributed = unattributed_metrics(all_totals, visible)
+    report = render_report(
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        all_totals,
+        visible,
+        unattributed,
+        exact_brand_query([row("colixo", 90, 2, 7)]),
+        [],
+        [],
+        [],
+        [],
+    )
+    assert "Clics non attribuables : **0**" in report
+    assert "Impressions non attribuables : **0**" in report
+    assert "Les agrégations Search Console ne sont pas directement conciliables" in report
+    assert "non attribuables : **-" not in report
 
 
 def test_exact_colixo_brand_row_is_exportable_without_extrapolation():
@@ -211,6 +260,20 @@ def test_private_http_200_without_noindex_requires_review():
     assert result["verdict"] == "review"
 
 
+def test_private_http_200_with_noindex_still_requires_review():
+    result = analyze_http_payload(
+        "legacy:private",
+        "https://www.colixo.ch/private",
+        200,
+        {"Content-Type": "text/html"},
+        '<html><head><meta name="robots" content="noindex,nofollow"></head></html>',
+        "<html><title>Home</title></html>",
+    )
+    assert result["technical_classification"] == "private_noindex_review"
+    assert result["verdict"] == "review"
+    assert result["verdict"] != "expected"
+
+
 def test_sitemap_http_200_with_html_is_error():
     result = analyze_http_payload(
         "sitemap",
@@ -292,6 +355,8 @@ def test_main_makes_two_gsc_queries_and_exports_accuracy_fields(monkeypatch, tmp
     assert payload["property_totals"]["total_clicks"] == 40
     assert payload["visible_query_totals"]["visible_query_clicks"] == 30
     assert payload["unattributed"]["unattributed_clicks"] == 10
+    assert payload["unattributed"]["raw_unattributed_clicks"] == 10
+    assert payload["unattributed"]["aggregation_inconsistency"] is False
     assert payload["brand_query"]["query"] == "colixo"
     assert "brand_click_share_visible_queries" in payload["visible_query_totals"]
 

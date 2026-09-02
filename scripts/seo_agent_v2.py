@@ -220,15 +220,20 @@ def aggregate_visible_queries(
 
 def unattributed_metrics(
     all_property_totals: dict[str, float], visible_totals: dict[str, float]
-) -> dict[str, float]:
+) -> dict[str, float | bool]:
+    raw_clicks = (
+        all_property_totals["total_clicks"] - visible_totals["visible_query_clicks"]
+    )
+    raw_impressions = (
+        all_property_totals["total_impressions"]
+        - visible_totals["visible_query_impressions"]
+    )
     return {
-        "unattributed_clicks": (
-            all_property_totals["total_clicks"] - visible_totals["visible_query_clicks"]
-        ),
-        "unattributed_impressions": (
-            all_property_totals["total_impressions"]
-            - visible_totals["visible_query_impressions"]
-        ),
+        "raw_unattributed_clicks": raw_clicks,
+        "raw_unattributed_impressions": raw_impressions,
+        "unattributed_clicks": max(0.0, raw_clicks),
+        "unattributed_impressions": max(0.0, raw_impressions),
+        "aggregation_inconsistency": raw_clicks < 0 or raw_impressions < 0,
     }
 
 
@@ -409,8 +414,8 @@ def analyze_http_payload(
     elif policy == "private":
         noindex = "noindex" in result.get("meta_robots", "").casefold()
         if status == 200 and noindex:
-            result["technical_classification"] = "private_noindex"
-            result["verdict"] = "expected"
+            result["technical_classification"] = "private_noindex_review"
+            result["verdict"] = "review"
         elif status in {301, 302, 303, 307, 308} and location:
             result["technical_classification"] = "private_redirect"
             result["verdict"] = "expected"
@@ -492,7 +497,7 @@ def render_report(
     end: date,
     all_property_totals: dict[str, float],
     visible_totals: dict[str, float],
-    unattributed: dict[str, float],
+    unattributed: dict[str, float | bool],
     brand_query: dict[str, Any] | None,
     opportunities: list[Opportunity],
     emerging_signals: list[Opportunity],
@@ -524,9 +529,15 @@ def render_report(
         f"- Part des clics hors marque parmi les requêtes visibles : **{pct(visible_totals['nonbrand_click_share_visible_queries'])}**",
         f"- Part des clics marque parmi les requêtes visibles : **{pct(visible_totals['brand_click_share_visible_queries'])}**",
         "",
-        "## Performance marque",
-        "",
     ]
+
+    if unattributed["aggregation_inconsistency"]:
+        lines += [
+            "> ⚠️ Les agrégations Search Console ne sont pas directement conciliables sur cette période.",
+            "",
+        ]
+
+    lines += ["## Performance marque", ""]
 
     if brand_query is None:
         lines += ["La requête exacte `colixo` n'est pas présente dans les lignes visibles.", ""]
