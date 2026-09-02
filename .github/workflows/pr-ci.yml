@@ -27,7 +27,7 @@ jobs:
         run: pip install -r requirements-v2.txt
 
       - name: Run tests
-        run: PYTHONPATH=. pytest -q
+        run: python -m pytest -q
 
       - name: Compile Python sources
         run: >-
