@@ -1,4 +1,4 @@
-# Colixo SEO / Market Intelligence Agent V3 — Phase 1
+# Colixo SEO / Market Intelligence Agent V3 — Phase 1 + GA4 Phase 2C foundation
 
 ## Purpose and boundary
 
@@ -128,3 +128,42 @@ insufficient evidence, and safety/data provenance.
 
 Reports are analytical artifacts only. They do not publish to Colixo, modify
 SEO content, change pricing, contact customers, or trigger deployments.
+
+## GA4 Data API adapter — Phase 2C, present but disabled
+
+Phase 2C adds a read-only Google Analytics Data API adapter for property
+`552715460` (`properties/552715460`). It is not wired into the V3 agent: the
+active analytics source remains `local_fixture`, `network_enabled` remains
+`false`, and importing V3 creates neither a Google client nor credentials.
+
+The adapter accepts an injected client and an explicit date range. Its future
+opt-in live factory uses the official `google-analytics-data` client with
+Application Default Credentials. Authentication is intentionally not part of
+this phase; a later gate will use OIDC / Workload Identity Federation. No
+service-account key, inline credential JSON, OAuth token, or GitHub secret is
+accepted or committed.
+
+Two deterministic aggregate reports are defined:
+
+- acquisition: dimension `sessionDefaultChannelGroup`;
+- page topics: dimensions `pagePath` and `sessionDefaultChannelGroup`;
+- both: metrics `sessions`, `engagedSessions`, and `keyEvents`;
+- both: exact channel filter `Organic Search`.
+
+Known public paths map to explicit commercial topics. Unknown paths and legal
+pages are excluded from commercial signals; no topic is inferred from query
+strings or free text. `pageLocation`, user identifiers, client IDs, email,
+phone, fine geography, device identifiers, `userPseudoId`, `transactionId`,
+and other PII-bearing fields are never requested.
+
+GA4 aggregates map to the existing `TrafficSignal` model as follows:
+
+- `sessions` → `organic_sessions`;
+- `engagedSessions` → `engaged_sessions`;
+- `keyEvents` → the historical V3 field `conversions`.
+
+Here, `conversions` means GA4 key events; the model is not renamed in Phase 2C.
+Evidence records `google_analytics_4`, provenance `ga4_data_api`, property ID,
+date range, dimensions, metrics, channel, and public page paths only. Malformed
+responses, missing metrics, unsafe paths, unexpected dimensions or channels,
+missing clients, unavailable credentials, and API failures all fail closed.

@@ -41,6 +41,24 @@
     "reviews": "local_fixture",
     "business_metrics": "local_fixture"
   },
+  "ga4_data_api": {
+    "enabled": false,
+    "property_id": "552715460",
+    "resource": "properties/552715460",
+    "channel": "Organic Search",
+    "date_range": {
+      "start_date": "28daysAgo",
+      "end_date": "yesterday"
+    },
+    "page_topics": {
+      "/": "general_delivery",
+      "/business-plus": "business_delivery",
+      "/portail-client/livraison-colis-suisse-romande": "parcel_delivery",
+      "/portail-client/livraison-vins-vignerons-suisse-romande": "wine_delivery",
+      "/portail-client/envoi-securise-horlogerie": "secure_watch_delivery"
+    },
+    "unmapped_and_legal_pages": "exclude_from_commercial_signals"
+  },
   "privacy": {
     "aggregated_only": true,
     "personal_data_allowed": false,

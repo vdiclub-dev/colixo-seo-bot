@@ -511,7 +511,7 @@ def test_v2_and_production_workflow_are_byte_unchanged():
 
 
 def test_v3_source_tree_contains_no_network_or_supabase_clients():
-    forbidden = ("import requests", "from requests", "urllib.request", "supabase", "google.analytics")
+    forbidden = ("import requests", "from requests", "urllib.request", "supabase", "httpx")
     content = "\n".join(
         path.read_text() for path in sorted((ROOT / "scripts/v3").rglob("*.py"))
     ).lower()
