@@ -50,7 +50,7 @@
       "start_date": "28daysAgo",
       "end_date": "yesterday"
     },
-    "page_topics": {
+    "landing_page_topics": {
       "/": "general_delivery",
       "/business-plus": "business_delivery",
       "/portail-client/livraison-colis-suisse-romande": "parcel_delivery",

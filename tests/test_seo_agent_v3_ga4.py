@@ -8,10 +8,10 @@ from types import SimpleNamespace
 import pytest
 
 from scripts.v3.sources.analytics import (
-    DEFAULT_GA4_PAGE_TOPICS,
+    DEFAULT_GA4_LANDING_PAGE_TOPICS,
     GA4_CHANNEL_DIMENSIONS,
     GA4_METRICS,
-    GA4_PAGE_DIMENSIONS,
+    GA4_LANDING_PAGE_DIMENSIONS,
     GA4_PROPERTY_ID,
     GA4_RESOURCE,
     ORGANIC_SEARCH_CHANNEL,
@@ -76,12 +76,12 @@ def row(dimensions, metrics):
     )
 
 
-def fake_client(page_rows=(), channel_rows=None):
+def fake_client(landing_rows=(), channel_rows=None):
     if channel_rows is None:
         channel_rows = (row((ORGANIC_SEARCH_CHANNEL,), ("20", "15", "3")),)
     return FakeClient(
         response(GA4_CHANNEL_DIMENSIONS, channel_rows),
-        response(GA4_PAGE_DIMENSIONS, page_rows),
+        response(GA4_LANDING_PAGE_DIMENSIONS, landing_rows),
     )
 
 
@@ -102,6 +102,8 @@ def test_real_config_keeps_ga4_adapter_disabled_and_fixture_active():
     assert config["ga4_data_api"]["enabled"] is False
     assert config["ga4_data_api"]["property_id"] == "552715460"
     assert config["ga4_data_api"]["resource"] == "properties/552715460"
+    assert "landing_page_topics" in config["ga4_data_api"]
+    assert "page_topics" not in config["ga4_data_api"]
     assert config["phase_1_sources"]["analytics"] == "local_fixture"
     assert config["mode"]["network_enabled"] is False
 
@@ -180,15 +182,16 @@ def test_channel_request_uses_only_the_approved_dimension_metrics_and_filter():
     }
 
 
-def test_page_request_uses_page_path_and_never_pii_or_query_dimensions():
-    request = adapter(fake_client()).page_request()
+def test_landing_page_request_uses_only_landing_page_and_never_query_dimensions():
+    request = adapter(fake_client()).landing_page_request()
     assert tuple(item["name"] for item in request["dimensions"]) == (
-        "pagePath", "sessionDefaultChannelGroup",
+        "landingPage", "sessionDefaultChannelGroup",
     )
     serialized = json.dumps(request)
     for prohibited in (
-        "pageLocation", "userPseudoId", "transactionId", "clientId",
-        "email", "phone", "city", "deviceId",
+        "pagePath", "landingPagePlusQueryString", "pageLocation",
+        "pagePathPlusQueryString", "userPseudoId", "transactionId",
+        "clientId", "email", "phone", "city", "deviceId",
     ):
         assert prohibited not in serialized
 
@@ -205,10 +208,10 @@ def test_fake_client_only_and_no_socket_access(monkeypatch):
 
 
 def test_ga4_metrics_map_to_existing_traffic_signal_and_evidence():
-    page_rows = (
+    landing_rows = (
         row(("/business-plus", ORGANIC_SEARCH_CHANNEL), ("12", "9", "2.5")),
     )
-    signal = adapter(fake_client(page_rows)).collect()[0]
+    signal = adapter(fake_client(landing_rows)).collect()[0]
     assert signal.topic == "business_delivery"
     assert signal.organic_sessions == 12
     assert signal.engaged_sessions == 9
@@ -222,43 +225,59 @@ def test_ga4_metrics_map_to_existing_traffic_signal_and_evidence():
     assert proof.fact["date_range"] == {
         "start_date": "2026-08-01", "end_date": "2026-08-31",
     }
-    assert proof.fact["dimensions"] == GA4_PAGE_DIMENSIONS
+    assert proof.fact["dimensions"] == GA4_LANDING_PAGE_DIMENSIONS
     assert proof.fact["metrics"] == GA4_METRICS
     assert proof.fact["organic_channel_totals"] == {
         "sessions": 20.0,
         "engaged_sessions": 15.0,
         "key_events": 3.0,
     }
+    assert proof.fact["landing_pages"] == ("/business-plus",)
+    assert "page_paths" not in proof.fact
+
+
+def test_known_landing_pages_map_to_their_explicit_topics():
+    landing_rows = (
+        row(("/", ORGANIC_SEARCH_CHANNEL), ("8", "6", "1")),
+        row(("/business-plus", ORGANIC_SEARCH_CHANNEL), ("12", "9", "2")),
+    )
+    signals = adapter(fake_client(landing_rows)).collect()
+    assert tuple(signal.topic for signal in signals) == (
+        "business_delivery",
+        "general_delivery",
+    )
 
 
 @pytest.mark.parametrize(
-    ("channel_metrics", "page_metrics"),
+    ("channel_metrics", "landing_metrics"),
     [
         (("20", "15", "3"), ("12", "9", "2")),
         (("12", "9", "2"), ("12", "9", "2")),
     ],
 )
-def test_channel_totals_bound_commercial_page_totals(channel_metrics, page_metrics):
+def test_channel_totals_bound_commercial_landing_totals(
+    channel_metrics, landing_metrics
+):
     client = fake_client(
-        (row(("/", ORGANIC_SEARCH_CHANNEL), page_metrics),),
+        (row(("/", ORGANIC_SEARCH_CHANNEL), landing_metrics),),
         channel_rows=(row((ORGANIC_SEARCH_CHANNEL,), channel_metrics),),
     )
-    assert adapter(client).collect()[0].organic_sessions == float(page_metrics[0])
+    assert adapter(client).collect()[0].organic_sessions == float(landing_metrics[0])
 
 
 @pytest.mark.parametrize(
-    ("channel_metrics", "page_metrics"),
+    ("channel_metrics", "landing_metrics"),
     [
         (("10", "20", "20"), ("11", "5", "1")),
         (("20", "10", "20"), ("5", "11", "1")),
         (("20", "20", "10"), ("5", "5", "11")),
     ],
 )
-def test_commercial_page_metric_above_channel_total_fails_closed(
-    channel_metrics, page_metrics
+def test_commercial_landing_metric_above_channel_total_fails_closed(
+    channel_metrics, landing_metrics
 ):
     client = fake_client(
-        (row(("/", ORGANIC_SEARCH_CHANNEL), page_metrics),),
+        (row(("/", ORGANIC_SEARCH_CHANNEL), landing_metrics),),
         channel_rows=(row((ORGANIC_SEARCH_CHANNEL,), channel_metrics),),
     )
     with pytest.raises(GA4DataSourceError, match="exceed Organic Search"):
@@ -266,7 +285,7 @@ def test_commercial_page_metric_above_channel_total_fails_closed(
 
 
 def test_multiple_rows_per_topic_are_aggregated_deterministically():
-    page_topics = {
+    landing_page_topics = {
         "/parcel-a": "parcel_delivery",
         "/parcel-b": "parcel_delivery",
         "/wine": "wine_delivery",
@@ -276,8 +295,12 @@ def test_multiple_rows_per_topic_are_aggregated_deterministically():
         row(("/wine", ORGANIC_SEARCH_CHANNEL), ("5", "4", "0")),
         row(("/parcel-a", ORGANIC_SEARCH_CHANNEL), ("6.8", "5", "2")),
     )
-    first = adapter(fake_client(rows), page_topics=page_topics).collect()
-    second = adapter(fake_client(tuple(reversed(rows))), page_topics=page_topics).collect()
+    first = adapter(
+        fake_client(rows), landing_page_topics=landing_page_topics
+    ).collect()
+    second = adapter(
+        fake_client(tuple(reversed(rows))), landing_page_topics=landing_page_topics
+    ).collect()
     assert first == second
     assert tuple(item.topic for item in first) == ("parcel_delivery", "wine_delivery")
     assert first[0].organic_sessions == 11
@@ -285,7 +308,7 @@ def test_multiple_rows_per_topic_are_aggregated_deterministically():
     assert first[0].conversions == 3
 
 
-def test_unknown_and_legal_pages_are_explicitly_excluded():
+def test_unknown_and_legal_landing_pages_are_explicitly_excluded():
     rows = (
         row(("/unknown-public-page", ORGANIC_SEARCH_CHANNEL), ("100", "90", "20")),
         row(("/protection-donnees", ORGANIC_SEARCH_CHANNEL), ("100", "90", "20")),
@@ -293,12 +316,17 @@ def test_unknown_and_legal_pages_are_explicitly_excluded():
     assert adapter(fake_client(rows)).collect() == ()
 
 
-def test_unknown_pages_cannot_create_a_commercial_topic():
-    custom_mapping = dict(DEFAULT_GA4_PAGE_TOPICS)
+def test_not_set_landing_page_is_explicitly_excluded():
+    rows = (row(("(not set)", ORGANIC_SEARCH_CHANNEL), ("100", "90", "20")),)
+    assert adapter(fake_client(rows)).collect() == ()
+
+
+def test_unknown_landing_pages_cannot_create_a_commercial_topic():
+    custom_mapping = dict(DEFAULT_GA4_LANDING_PAGE_TOPICS)
     assert "/unknown-public-page" not in custom_mapping
     result = adapter(
         fake_client((row(("/unknown-public-page", ORGANIC_SEARCH_CHANNEL), ("1", "1", "1")),)),
-        page_topics=custom_mapping,
+        landing_page_topics=custom_mapping,
     ).collect()
     assert result == ()
 
@@ -306,7 +334,7 @@ def test_unknown_pages_cannot_create_a_commercial_topic():
 @pytest.mark.parametrize("unsafe_path", ["/parcel?email=x", "/parcel#phone", "not-a-path", ""])
 def test_query_strings_fragments_and_malformed_paths_fail_closed(unsafe_path):
     client = fake_client((row((unsafe_path, ORGANIC_SEARCH_CHANNEL), ("1", "1", "0")),))
-    with pytest.raises(GA4DataSourceError, match="unsafe pagePath|row dimensions"):
+    with pytest.raises(GA4DataSourceError, match="unsafe landingPage|row dimensions"):
         adapter(client).collect()
 
 
@@ -319,7 +347,7 @@ def test_unexpected_channel_or_dimensions_fail_closed():
 
     wrong_headers = FakeClient(
         response(("pageLocation",)),
-        response(GA4_PAGE_DIMENSIONS),
+        response(GA4_LANDING_PAGE_DIMENSIONS),
     )
     with pytest.raises(GA4DataSourceError, match="dimensions"):
         adapter(wrong_headers).collect()
@@ -339,7 +367,7 @@ def test_missing_or_changed_metric_fails_closed():
 
     wrong_metric_headers = FakeClient(
         response(GA4_CHANNEL_DIMENSIONS, metrics=("sessions", "engagedSessions", "conversions")),
-        response(GA4_PAGE_DIMENSIONS),
+        response(GA4_LANDING_PAGE_DIMENSIONS),
     )
     with pytest.raises(GA4DataSourceError, match="metrics"):
         adapter(wrong_metric_headers).collect()

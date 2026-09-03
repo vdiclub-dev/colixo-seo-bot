@@ -146,15 +146,25 @@ accepted or committed.
 Two deterministic aggregate reports are defined:
 
 - acquisition: dimension `sessionDefaultChannelGroup`;
-- page topics: dimensions `pagePath` and `sessionDefaultChannelGroup`;
+- landing-page topics: dimensions `landingPage` and
+  `sessionDefaultChannelGroup`;
 - both: metrics `sessions`, `engagedSessions`, and `keyEvents`;
 - both: exact channel filter `Organic Search`.
 
-Known public paths map to explicit commercial topics. Unknown paths and legal
-pages are excluded from commercial signals; no topic is inferred from query
-strings or free text. `pageLocation`, user identifiers, client IDs, email,
-phone, fine geography, device identifiers, `userPseudoId`, `transactionId`,
-and other PII-bearing fields are never requested.
+Known public landing pages map to explicit commercial topics. Unknown paths,
+legal pages, and `(not set)` are excluded from commercial signals; no topic is
+inferred from query strings or free text. `landingPagePlusQueryString`,
+`pageLocation`, `pagePath`, user identifiers, client IDs, email, phone, fine
+geography, device identifiers, `userPseudoId`, `transactionId`, and other
+PII-bearing fields are never requested.
+
+GA4 `sessions` grouped by `pagePath` are not additive because one session may
+visit several pages. V3 therefore attributes Organic Search sessions by
+`landingPage`, the first page of the session. A topic's `organic_sessions`
+means Organic Search sessions whose landing page maps explicitly to that V3
+topic; it is not a pageview count. The acquisition report supplies global
+Organic Search totals that bound the retained commercial landing-page totals
+without requiring equality.
 
 GA4 aggregates map to the existing `TrafficSignal` model as follows:
 

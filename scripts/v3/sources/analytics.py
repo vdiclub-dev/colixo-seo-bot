@@ -13,9 +13,9 @@ GA4_PROPERTY_ID = "552715460"
 GA4_RESOURCE = "properties/552715460"
 ORGANIC_SEARCH_CHANNEL = "Organic Search"
 GA4_CHANNEL_DIMENSIONS = ("sessionDefaultChannelGroup",)
-GA4_PAGE_DIMENSIONS = ("pagePath", "sessionDefaultChannelGroup")
+GA4_LANDING_PAGE_DIMENSIONS = ("landingPage", "sessionDefaultChannelGroup")
 GA4_METRICS = ("sessions", "engagedSessions", "keyEvents")
-DEFAULT_GA4_PAGE_TOPICS = {
+DEFAULT_GA4_LANDING_PAGE_TOPICS = {
     "/": "general_delivery",
     "/business-plus": "business_delivery",
     "/portail-client/livraison-colis-suisse-romande": "parcel_delivery",
@@ -77,7 +77,7 @@ class GoogleAnalyticsDataSource:
         start_date: str,
         end_date: str,
         observed_at: str,
-        page_topics: Optional[Mapping[str, str]] = None,
+        landing_page_topics: Optional[Mapping[str, str]] = None,
     ) -> None:
         normalized_property_id = str(property_id or "").strip()
         if not normalized_property_id.isdecimal() or int(normalized_property_id) <= 0:
@@ -97,10 +97,14 @@ class GoogleAnalyticsDataSource:
                 "observed_at must be a real ISO date (YYYY-MM-DD)"
             ) from None
 
-        mapping = dict(DEFAULT_GA4_PAGE_TOPICS if page_topics is None else page_topics)
-        for page_path, topic in mapping.items():
-            if not _is_safe_page_path(page_path) or not str(topic or "").strip():
-                raise GA4DataSourceError("page topic mapping is invalid")
+        mapping = dict(
+            DEFAULT_GA4_LANDING_PAGE_TOPICS
+            if landing_page_topics is None
+            else landing_page_topics
+        )
+        for landing_page, topic in mapping.items():
+            if not _is_safe_landing_page(landing_page) or not str(topic or "").strip():
+                raise GA4DataSourceError("landing page topic mapping is invalid")
 
         self.property_id = normalized_property_id
         self.property_resource = "properties/{}".format(normalized_property_id)
@@ -108,22 +112,22 @@ class GoogleAnalyticsDataSource:
         self.start_date = str(start_date).strip()
         self.end_date = str(end_date).strip()
         self.observed_at = observed_at
-        self.page_topics = mapping
+        self.landing_page_topics = mapping
 
     def channel_request(self) -> Mapping[str, Any]:
         return self._request(GA4_CHANNEL_DIMENSIONS)
 
-    def page_request(self) -> Mapping[str, Any]:
-        return self._request(GA4_PAGE_DIMENSIONS)
+    def landing_page_request(self) -> Mapping[str, Any]:
+        return self._request(GA4_LANDING_PAGE_DIMENSIONS)
 
     def collect(self) -> Tuple[TrafficSignal, ...]:
         """Fetch and normalize aggregate data, failing closed on uncertainty."""
 
         channel_response = self._run_report(self.channel_request())
         channel_totals = self._parse_channel_response(channel_response)
-        page_response = self._run_report(self.page_request())
-        rows = self._parse_page_response(page_response)
-        self._validate_commercial_page_totals(rows, channel_totals)
+        landing_page_response = self._run_report(self.landing_page_request())
+        rows = self._parse_landing_page_response(landing_page_response)
+        self._validate_commercial_landing_totals(rows, channel_totals)
         return self._aggregate_rows(rows, channel_totals)
 
     def _request(self, dimensions: Tuple[str, ...]) -> Mapping[str, Any]:
@@ -167,39 +171,44 @@ class GoogleAnalyticsDataSource:
                 totals[index] += value
         return tuple(totals)
 
-    def _parse_page_response(
+    def _parse_landing_page_response(
         self, response: Any
     ) -> Tuple[Tuple[str, str, Decimal, Decimal, Decimal], ...]:
-        self._validate_headers(response, GA4_PAGE_DIMENSIONS)
+        self._validate_headers(response, GA4_LANDING_PAGE_DIMENSIONS)
         normalized = []
         for row in tuple(getattr(response, "rows", ()) or ()):
             dimensions, metrics = self._row_values(row, 2)
-            page_path, channel = dimensions
+            landing_page, channel = dimensions
             if channel != ORGANIC_SEARCH_CHANNEL:
                 raise GA4DataSourceError("GA4 response contains an unexpected channel")
-            if not _is_safe_page_path(page_path):
-                raise GA4DataSourceError("GA4 response contains an unsafe pagePath")
-            topic = self.page_topics.get(page_path)
+            if landing_page == "(not set)":
+                continue
+            if not _is_safe_landing_page(landing_page):
+                raise GA4DataSourceError("GA4 response contains an unsafe landingPage")
+            topic = self.landing_page_topics.get(landing_page)
             if topic is None:
                 # Unknown and legal paths are intentionally excluded; no topic
                 # is inferred from URL fragments, query strings, or free text.
                 continue
-            normalized.append((topic, page_path, *metrics))
+            normalized.append((topic, landing_page, *metrics))
         return tuple(sorted(normalized))
 
-    def _validate_commercial_page_totals(
+    def _validate_commercial_landing_totals(
         self,
         rows: Tuple[Tuple[str, str, Decimal, Decimal, Decimal], ...],
         channel_totals: Tuple[Decimal, Decimal, Decimal],
     ) -> None:
-        page_totals = [Decimal(0), Decimal(0), Decimal(0)]
+        landing_totals = [Decimal(0), Decimal(0), Decimal(0)]
         for _, _, sessions, engaged_sessions, key_events in rows:
-            page_totals[0] += sessions
-            page_totals[1] += engaged_sessions
-            page_totals[2] += key_events
-        if any(page > channel for page, channel in zip(page_totals, channel_totals)):
+            landing_totals[0] += sessions
+            landing_totals[1] += engaged_sessions
+            landing_totals[2] += key_events
+        if any(
+            landing > channel
+            for landing, channel in zip(landing_totals, channel_totals)
+        ):
             raise GA4DataSourceError(
-                "GA4 commercial page totals exceed Organic Search channel totals"
+                "GA4 commercial landing totals exceed Organic Search channel totals"
             )
 
     def _validate_headers(self, response: Any, dimensions: Tuple[str, ...]) -> None:
@@ -241,17 +250,17 @@ class GoogleAnalyticsDataSource:
         channel_totals: Tuple[Decimal, Decimal, Decimal],
     ) -> Tuple[TrafficSignal, ...]:
         aggregates: dict[str, dict[str, Any]] = {}
-        for topic, page_path, sessions, engaged_sessions, key_events in rows:
+        for topic, landing_page, sessions, engaged_sessions, key_events in rows:
             current = aggregates.setdefault(topic, {
                 "sessions": Decimal(0),
                 "engaged_sessions": Decimal(0),
                 "key_events": Decimal(0),
-                "page_paths": set(),
+                "landing_pages": set(),
             })
             current["sessions"] += sessions
             current["engaged_sessions"] += engaged_sessions
             current["key_events"] += key_events
-            current["page_paths"].add(page_path)
+            current["landing_pages"].add(landing_page)
 
         signals = []
         for topic in sorted(aggregates):
@@ -263,7 +272,7 @@ class GoogleAnalyticsDataSource:
                     "start_date": self.start_date,
                     "end_date": self.end_date,
                 },
-                "dimensions": GA4_PAGE_DIMENSIONS,
+                "dimensions": GA4_LANDING_PAGE_DIMENSIONS,
                 "metrics": GA4_METRICS,
                 "channel": ORGANIC_SEARCH_CHANNEL,
                 "organic_channel_totals": {
@@ -271,7 +280,7 @@ class GoogleAnalyticsDataSource:
                     "engaged_sessions": float(channel_totals[1]),
                     "key_events": float(channel_totals[2]),
                 },
-                "page_paths": tuple(sorted(aggregate["page_paths"])),
+                "landing_pages": tuple(sorted(aggregate["landing_pages"])),
                 "organic_sessions": float(aggregate["sessions"]),
                 "engaged_sessions": float(aggregate["engaged_sessions"]),
                 "key_events": float(aggregate["key_events"]),
@@ -305,11 +314,11 @@ def _parse_metric(value: Any) -> Decimal:
     return parsed
 
 
-def _is_safe_page_path(value: Any) -> bool:
-    page_path = str(value or "")
+def _is_safe_landing_page(value: Any) -> bool:
+    landing_page = str(value or "")
     return (
-        page_path.startswith("/")
-        and "?" not in page_path
-        and "#" not in page_path
-        and "\x00" not in page_path
+        landing_page.startswith("/")
+        and "?" not in landing_page
+        and "#" not in landing_page
+        and "\x00" not in landing_page
     )
