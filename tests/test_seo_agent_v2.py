@@ -36,6 +36,15 @@ def row(query, impressions, position, clicks=0, ctr=0.0):
     return SearchRow((query,), clicks, impressions, ctr, position)
 
 
+def test_real_config_has_synchronized_prod_legacy_policies():
+    policies = {
+        entry["path"]: entry["policy"]
+        for entry in agent.load_config()["legacy_urls"]
+    }
+    assert policies["/simulate-price/index.html"] == "keep_gone"
+    assert policies["/demande-transport.html"] == "redirect_candidate"
+
+
 def test_property_totals_payload_has_no_dimensions():
     payload = build_search_analytics_payload(date(2026, 1, 1), date(2026, 1, 31), [])
     assert "dimensions" not in payload
@@ -235,6 +244,19 @@ def test_keep_gone_http_200_is_warning_even_when_distinct():
     assert result["verdict"] == "warning"
 
 
+def test_keep_gone_http_404_is_expected_gone():
+    result = analyze_http_payload(
+        "legacy:keep_gone",
+        "https://www.colixo.ch/simulate-price/index.html",
+        404,
+        {"Content-Type": "text/html"},
+        "<html><title>Page introuvable</title></html>",
+        "<html><title>Home</title></html>",
+    )
+    assert result["technical_classification"] == "expected_gone"
+    assert result["verdict"] == "expected"
+
+
 def test_redirect_candidate_to_homepage_is_not_accepted_as_relevant():
     result = analyze_http_payload(
         "legacy:redirect_candidate",
@@ -245,6 +267,21 @@ def test_redirect_candidate_to_homepage_is_not_accepted_as_relevant():
     )
     assert result["technical_classification"] == "warning"
     assert result["verdict"] == "warning"
+
+
+def test_redirect_candidate_internal_non_homepage_301_is_expected():
+    result = analyze_http_payload(
+        "legacy:redirect_candidate",
+        "https://www.colixo.ch/demande-transport.html",
+        301,
+        {
+            "Content-Type": "text/plain",
+            "Location": "/portail-client/livraison-colis-suisse-romande",
+        },
+        "",
+    )
+    assert result["technical_classification"] == "expected_redirect"
+    assert result["verdict"] == "expected"
 
 
 def test_private_http_200_without_noindex_requires_review():

@@ -44,9 +44,9 @@
   "min_impressions_for_priority": 2,
   "top_opportunities": 15,
   "legacy_urls": [
-    {"path": "/simulate-price/index.html", "policy": "review"},
+    {"path": "/simulate-price/index.html", "policy": "keep_gone"},
     {"path": "/livraison-fribourg.html", "policy": "redirect_candidate"},
-    {"path": "/demande-transport.html", "policy": "review"},
+    {"path": "/demande-transport.html", "policy": "redirect_candidate"},
     {"path": "/accept-cgv.html", "policy": "keep_gone"},
     {"path": "/login/?register=1", "policy": "private_or_redirect"},
     {"path": "/admin/driver-app", "policy": "private"},
