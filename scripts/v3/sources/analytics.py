@@ -1,5 +1,7 @@
 """Offline fixtures and the disabled GA4 Data API adapter for V3."""
 
+import re
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Mapping, Optional, Tuple
 
@@ -74,6 +76,7 @@ class GoogleAnalyticsDataSource:
         client: Any,
         start_date: str,
         end_date: str,
+        observed_at: str,
         page_topics: Optional[Mapping[str, str]] = None,
     ) -> None:
         normalized_property_id = str(property_id or "").strip()
@@ -83,6 +86,16 @@ class GoogleAnalyticsDataSource:
             raise GA4DataSourceError("an injected GA4 Data API client is required")
         if not str(start_date or "").strip() or not str(end_date or "").strip():
             raise GA4DataSourceError("an explicit GA4 date range is required")
+        if not isinstance(observed_at, str) or not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}", observed_at
+        ):
+            raise GA4DataSourceError("observed_at must be a real ISO date (YYYY-MM-DD)")
+        try:
+            date.fromisoformat(observed_at)
+        except ValueError:
+            raise GA4DataSourceError(
+                "observed_at must be a real ISO date (YYYY-MM-DD)"
+            ) from None
 
         mapping = dict(DEFAULT_GA4_PAGE_TOPICS if page_topics is None else page_topics)
         for page_path, topic in mapping.items():
@@ -94,6 +107,7 @@ class GoogleAnalyticsDataSource:
         self.client = client
         self.start_date = str(start_date).strip()
         self.end_date = str(end_date).strip()
+        self.observed_at = observed_at
         self.page_topics = mapping
 
     def channel_request(self) -> Mapping[str, Any]:
@@ -106,10 +120,11 @@ class GoogleAnalyticsDataSource:
         """Fetch and normalize aggregate data, failing closed on uncertainty."""
 
         channel_response = self._run_report(self.channel_request())
-        self._parse_channel_response(channel_response)
+        channel_totals = self._parse_channel_response(channel_response)
         page_response = self._run_report(self.page_request())
         rows = self._parse_page_response(page_response)
-        return self._aggregate_rows(rows)
+        self._validate_commercial_page_totals(rows, channel_totals)
+        return self._aggregate_rows(rows, channel_totals)
 
     def _request(self, dimensions: Tuple[str, ...]) -> Mapping[str, Any]:
         return {
@@ -172,6 +187,21 @@ class GoogleAnalyticsDataSource:
             normalized.append((topic, page_path, *metrics))
         return tuple(sorted(normalized))
 
+    def _validate_commercial_page_totals(
+        self,
+        rows: Tuple[Tuple[str, str, Decimal, Decimal, Decimal], ...],
+        channel_totals: Tuple[Decimal, Decimal, Decimal],
+    ) -> None:
+        page_totals = [Decimal(0), Decimal(0), Decimal(0)]
+        for _, _, sessions, engaged_sessions, key_events in rows:
+            page_totals[0] += sessions
+            page_totals[1] += engaged_sessions
+            page_totals[2] += key_events
+        if any(page > channel for page, channel in zip(page_totals, channel_totals)):
+            raise GA4DataSourceError(
+                "GA4 commercial page totals exceed Organic Search channel totals"
+            )
+
     def _validate_headers(self, response: Any, dimensions: Tuple[str, ...]) -> None:
         if response is None:
             raise GA4DataSourceError("GA4 response is missing")
@@ -206,7 +236,9 @@ class GoogleAnalyticsDataSource:
         return dimensions, metrics
 
     def _aggregate_rows(
-        self, rows: Tuple[Tuple[str, str, Decimal, Decimal, Decimal], ...]
+        self,
+        rows: Tuple[Tuple[str, str, Decimal, Decimal, Decimal], ...],
+        channel_totals: Tuple[Decimal, Decimal, Decimal],
     ) -> Tuple[TrafficSignal, ...]:
         aggregates: dict[str, dict[str, Any]] = {}
         for topic, page_path, sessions, engaged_sessions, key_events in rows:
@@ -234,6 +266,11 @@ class GoogleAnalyticsDataSource:
                 "dimensions": GA4_PAGE_DIMENSIONS,
                 "metrics": GA4_METRICS,
                 "channel": ORGANIC_SEARCH_CHANNEL,
+                "organic_channel_totals": {
+                    "sessions": float(channel_totals[0]),
+                    "engaged_sessions": float(channel_totals[1]),
+                    "key_events": float(channel_totals[2]),
+                },
                 "page_paths": tuple(sorted(aggregate["page_paths"])),
                 "organic_sessions": float(aggregate["sessions"]),
                 "engaged_sessions": float(aggregate["engaged_sessions"]),
@@ -246,7 +283,7 @@ class GoogleAnalyticsDataSource:
                 conversions=float(aggregate["key_events"]),
                 evidence=(Evidence(
                     source="google_analytics_4",
-                    observed_at=self.end_date,
+                    observed_at=self.observed_at,
                     metric="organic_search_aggregate",
                     fact=evidence_fact,
                     confidence=Confidence.HIGH,

@@ -91,6 +91,7 @@ def adapter(client, **overrides):
         "client": client,
         "start_date": "2026-08-01",
         "end_date": "2026-08-31",
+        "observed_at": "2026-09-03",
     }
     arguments.update(overrides)
     return GoogleAnalyticsDataSource(**arguments)
@@ -121,6 +122,7 @@ def test_missing_or_invalid_property_id_fails_closed(property_id):
             client=fake_client(),
             start_date="2026-08-01",
             end_date="2026-08-31",
+            observed_at="2026-09-03",
         )
 
 
@@ -129,6 +131,32 @@ def test_missing_client_or_date_range_fails_closed():
         adapter(None)
     with pytest.raises(GA4DataSourceError, match="date range"):
         adapter(fake_client(), start_date="")
+
+
+@pytest.mark.parametrize(
+    "observed_at", ["", "yesterday", "today", "28daysAgo", "2026-99-99", None]
+)
+def test_observed_at_requires_a_real_explicit_iso_date(observed_at):
+    with pytest.raises(GA4DataSourceError, match="observed_at"):
+        adapter(fake_client(), observed_at=observed_at)
+
+
+def test_relative_ga4_date_range_remains_supported_without_becoming_observed_at():
+    source = adapter(
+        fake_client(),
+        start_date="28daysAgo",
+        end_date="yesterday",
+        observed_at="2026-09-03",
+    )
+    request = source.channel_request()
+    assert request["date_ranges"] == [{
+        "start_date": "28daysAgo",
+        "end_date": "yesterday",
+    }]
+    assert source.observed_at == "2026-09-03"
+    assert "datetime.now" not in (
+        ROOT / "scripts/v3/sources/analytics.py"
+    ).read_text()
 
 
 def test_channel_request_uses_only_the_approved_dimension_metrics_and_filter():
@@ -187,6 +215,7 @@ def test_ga4_metrics_map_to_existing_traffic_signal_and_evidence():
     assert signal.conversions == 2.5
     proof = signal.evidence[0]
     assert proof.source == "google_analytics_4"
+    assert proof.observed_at == "2026-09-03"
     assert proof.reference == "properties/552715460"
     assert proof.fact["provenance"] == "ga4_data_api"
     assert proof.fact["property"] == "552715460"
@@ -195,6 +224,45 @@ def test_ga4_metrics_map_to_existing_traffic_signal_and_evidence():
     }
     assert proof.fact["dimensions"] == GA4_PAGE_DIMENSIONS
     assert proof.fact["metrics"] == GA4_METRICS
+    assert proof.fact["organic_channel_totals"] == {
+        "sessions": 20.0,
+        "engaged_sessions": 15.0,
+        "key_events": 3.0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("channel_metrics", "page_metrics"),
+    [
+        (("20", "15", "3"), ("12", "9", "2")),
+        (("12", "9", "2"), ("12", "9", "2")),
+    ],
+)
+def test_channel_totals_bound_commercial_page_totals(channel_metrics, page_metrics):
+    client = fake_client(
+        (row(("/", ORGANIC_SEARCH_CHANNEL), page_metrics),),
+        channel_rows=(row((ORGANIC_SEARCH_CHANNEL,), channel_metrics),),
+    )
+    assert adapter(client).collect()[0].organic_sessions == float(page_metrics[0])
+
+
+@pytest.mark.parametrize(
+    ("channel_metrics", "page_metrics"),
+    [
+        (("10", "20", "20"), ("11", "5", "1")),
+        (("20", "10", "20"), ("5", "11", "1")),
+        (("20", "20", "10"), ("5", "5", "11")),
+    ],
+)
+def test_commercial_page_metric_above_channel_total_fails_closed(
+    channel_metrics, page_metrics
+):
+    client = fake_client(
+        (row(("/", ORGANIC_SEARCH_CHANNEL), page_metrics),),
+        channel_rows=(row((ORGANIC_SEARCH_CHANNEL,), channel_metrics),),
+    )
+    with pytest.raises(GA4DataSourceError, match="exceed Organic Search"):
+        adapter(client).collect()
 
 
 def test_multiple_rows_per_topic_are_aggregated_deterministically():
