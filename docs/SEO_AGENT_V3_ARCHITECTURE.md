@@ -14,10 +14,11 @@ change, or automatic commercial action in this phase.
 
 1. An offline source adapter receives a local fixture.
 2. The adapter validates and normalizes it into an immutable signal model.
-3. The scoring layer evaluates each known dimension independently.
-4. Unknown values remain `unknown` and are excluded from the weighted mean.
-5. Evidence confidence caps recommendation strength.
-6. The report labels observations as `FACT`, interpretations as `INFERENCE`,
+3. Signals are grouped by topic; every observation is aggregated and counted.
+4. The scoring layer evaluates each known dimension independently.
+5. Unknown values remain `unknown` and are excluded from the weighted mean.
+6. Evidence confidence caps recommendation strength.
+7. The report labels observations as `FACT`, interpretations as `INFERENCE`,
    and proposed human actions as `RECOMMENDATION`.
 
 The same interface can support future authorized connectors without changing
@@ -45,6 +46,9 @@ V2 observations but does not import or mutate the V2 implementation.
 Every evidence item records its source, observation time, metric or fact,
 confidence, and an optional public reference. Missing metrics are never
 estimated. Confidence levels are `very_low`, `low`, `medium`, and `high`.
+Evidence rows are averaged within each source/provenance first, then every
+source receives equal weight. A verbose source therefore cannot overwhelm a
+second source merely by emitting more evidence rows.
 
 A strong recommendation requires all of the following:
 
@@ -52,8 +56,10 @@ A strong recommendation requires all of the following:
 - evidence confidence of at least `medium`;
 - at least four known scoring dimensions.
 
-This is a safety ceiling, not a claim that the proposed action is correct.
-Human review remains mandatory.
+The weights and all three strong-recommendation thresholds are loaded from
+`config/seo_agent_v3.json`; invalid or absent configuration fails closed. This
+is a safety ceiling, not a claim that the proposed action is correct. Human
+review remains mandatory.
 
 ## Opportunity scoring
 
@@ -67,9 +73,20 @@ The deterministic 0–100 score keeps seven dimensions separate:
 - reputation gap;
 - evidence confidence.
 
-Each known dimension maps to a fixed point value and weight. Unknown dimensions
-receive neither points nor weight. The report exposes every dimension and the
-unknown list so a score can be reproduced and challenged without an LLM.
+Each known dimension maps to a fixed point value and configured weight. Unknown
+dimensions receive neither points nor weight. Search volumes and business
+aggregates are summed, rank observations are averaged, and competitor gap
+levels are averaged. Every source count—including competitor and review
+counts—is exposed in the score explanation. These operations are commutative,
+so fixture order cannot affect the result.
+
+Review reputation first applies a per-platform reliability rule. A missing or
+non-positive `review_count` remains unknown. Samples below five reviews are
+capped at a low gap regardless of rating. A high gap requires at least 50
+reviews, multiple consistent negative themes, a rating below 3.5, and at least
+medium declared confidence. Multiple platforms are then combined with bounded
+square-root sample weights and a confidence factor; `observation_window`
+remains attached to each normalized review signal for provenance.
 
 ## Privacy contract
 

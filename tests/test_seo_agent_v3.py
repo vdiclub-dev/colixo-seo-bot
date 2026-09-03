@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from scripts.v3.agent import MarketIntelligenceAgent
+from scripts.v3.config import load_v3_config
 from scripts.v3.models import (
     BusinessSignal,
     CompetitorSignal,
@@ -105,12 +106,283 @@ def test_competitor_and_aggregated_reviews_combine():
             observation_window="90d",
             positive_topics=("speed",),
             negative_topics=("tracking", "support"),
-            confidence=Confidence.MEDIUM,
+            confidence=Confidence.HIGH,
             evidence=ev,
         ),
     )
     assert score.competitive_gap is DimensionLevel.HIGH
     assert score.reputation_gap is DimensionLevel.HIGH
+
+
+def test_three_competitors_and_two_review_platforms_are_all_counted():
+    competitors = tuple(
+        CompetitorSignal(
+            TOPIC,
+            "competitor-{}".format(index),
+            level,
+            evidence=(evidence("competitor-{}".format(index)),),
+        )
+        for index, level in enumerate(
+            (DimensionLevel.HIGH, DimensionLevel.MEDIUM, DimensionLevel.LOW),
+            start=1,
+        )
+    )
+    reviews = tuple(
+        ReviewSignal(
+            TOPIC,
+            "platform-{}".format(index),
+            "aggregate competitor",
+            rating_average=3.2,
+            review_count=100,
+            observation_window="90d",
+            negative_topics=("tracking", "support"),
+            confidence=Confidence.HIGH,
+            evidence=(evidence("reviews-{}".format(index)),),
+        )
+        for index in (1, 2)
+    )
+    score = score_opportunity(TOPIC, competitor=competitors, review=reviews)
+    assert "competitor_signals=3" in score.explanation
+    assert "review_signals=2" in score.explanation
+    assert score.competitive_gap is DimensionLevel.MEDIUM
+    assert score.reputation_gap is DimensionLevel.HIGH
+
+
+def test_fixture_order_does_not_change_score_or_explanation():
+    competitors = (
+        CompetitorSignal(TOPIC, "a", DimensionLevel.HIGH),
+        CompetitorSignal(TOPIC, "b", DimensionLevel.LOW),
+        CompetitorSignal(TOPIC, "c", DimensionLevel.MEDIUM),
+    )
+    reviews = (
+        ReviewSignal(TOPIC, "one", "a", 3.2, 100, "90d", (), ("support", "tracking"), Confidence.HIGH),
+        ReviewSignal(TOPIC, "two", "b", 4.5, 20, "90d", ("speed",), (), Confidence.MEDIUM),
+    )
+    forward = score_opportunity(TOPIC, competitor=competitors, review=reviews)
+    reverse = score_opportunity(
+        TOPIC,
+        competitor=tuple(reversed(competitors)),
+        review=tuple(reversed(reviews)),
+    )
+    assert forward == reverse
+
+
+def test_duplicate_and_additional_signals_are_not_silently_dropped():
+    repeated = CompetitorSignal(TOPIC, "same fixture", DimensionLevel.HIGH)
+    score = score_opportunity(
+        TOPIC,
+        competitor=(repeated, repeated, repeated),
+        rank=(
+            RankSignal(TOPIC, TOPIC, position=8),
+            RankSignal(TOPIC, TOPIC, position=12),
+        ),
+    )
+    assert "competitor_signals=3" in score.explanation
+    assert "rank_signals=2" in score.explanation
+
+
+def test_agent_preserves_every_topic_signal_and_evidence():
+    def proof(source, index):
+        return [{
+            "source": "{}-{}".format(source, index),
+            "observed_at": "2026-09-03",
+            "metric": "fixture",
+            "fact": index,
+            "confidence": "medium",
+        }]
+
+    fixtures = {
+        "search_console": [
+            {"topic": TOPIC, "query": TOPIC, "impressions": 100, "evidence": proof("search", index)}
+            for index in (1, 2)
+        ],
+        "analytics": [
+            {"topic": TOPIC, "conversions": 2, "evidence": proof("analytics", index)}
+            for index in (1, 2)
+        ],
+        "rank_tracker": [
+            {"topic": TOPIC, "query": TOPIC, "position": 10, "evidence": proof("rank", index)}
+            for index in (1, 2)
+        ],
+        "competitors": [
+            {
+                "topic": TOPIC,
+                "competitor": "competitor-{}".format(index),
+                "gap_level": "medium",
+                "evidence": proof("competitor", index),
+            }
+            for index in (1, 2, 3)
+        ],
+        "reviews": [
+            {
+                "topic": TOPIC,
+                "source_platform": "platform-{}".format(index),
+                "competitor": "aggregate competitor",
+                "rating_average": 4.0,
+                "review_count": 20,
+                "observation_window": "90d",
+                "negative_topics": ["tracking"],
+                "confidence": "medium",
+                "evidence": proof("review", index),
+            }
+            for index in (1, 2)
+        ],
+        "business_metrics": [
+            {"topic": TOPIC, "orders_started": 2, "evidence": proof("business", index)}
+            for index in (1, 2)
+        ],
+    }
+    result = MarketIntelligenceAgent().run(fixtures)
+    explanation = result.scores[0].explanation
+    for label, count in (
+        ("search_signals", 2),
+        ("traffic_signals", 2),
+        ("rank_signals", 2),
+        ("competitor_signals", 3),
+        ("review_signals", 2),
+        ("business_signals", 2),
+        ("evidence_sources", 13),
+    ):
+        assert "{}={}".format(label, count) in explanation
+    assert len(result.recommendations[0].evidence) == 13
+
+
+def _write_config(tmp_path, *, search_weight=None, strong_min_score=None):
+    payload = json.loads((ROOT / "config/seo_agent_v3.json").read_text())
+    if search_weight is not None:
+        payload["score_weights"]["search_demand"] = search_weight
+    if strong_min_score is not None:
+        payload["recommendation_policy"]["strong_min_score"] = strong_min_score
+    path = tmp_path / "v3-config.json"
+    path.write_text(json.dumps(payload))
+    return path
+
+
+def test_configured_weights_change_score_deterministically(tmp_path):
+    fixture = {
+        "search_console": [{"topic": TOPIC, "query": TOPIC, "impressions": 1}],
+        "rank_tracker": [{"topic": TOPIC, "query": TOPIC, "position": 10}],
+    }
+    default_score = MarketIntelligenceAgent().run(fixture).scores[0].final_score
+    weighted_path = _write_config(tmp_path, search_weight=100)
+    weighted_agent = MarketIntelligenceAgent(weighted_path)
+    first = weighted_agent.run(fixture).scores[0].final_score
+    second = weighted_agent.run(fixture).scores[0].final_score
+    assert first == second
+    assert first != default_score
+
+
+def test_configured_recommendation_threshold_is_effective(tmp_path):
+    fixture = {
+        "search_console": [{
+            "topic": TOPIC,
+            "query": TOPIC,
+            "impressions": 350,
+            "average_position": 12,
+            "evidence": [{
+                "source": "search",
+                "observed_at": "2026-09-03",
+                "metric": "impressions",
+                "fact": 350,
+                "confidence": "medium",
+            }],
+        }],
+        "rank_tracker": [{
+            "topic": TOPIC,
+            "query": TOPIC,
+            "position": 12,
+            "evidence": [{
+                "source": "rank",
+                "observed_at": "2026-09-03",
+                "metric": "position",
+                "fact": 12,
+                "confidence": "medium",
+            }],
+        }],
+        "business_metrics": [{
+            "topic": TOPIC,
+            "pricing_simulations": 12,
+            "orders_started": 5,
+            "commercial_contacts": 4,
+            "revenue": 1000,
+            "evidence": [{
+                "source": "business",
+                "observed_at": "2026-09-03",
+                "metric": "aggregate_activity",
+                "fact": "observed",
+                "confidence": "medium",
+            }],
+        }],
+    }
+    default_result = MarketIntelligenceAgent().run(fixture)
+    assert default_result.recommendations[0].strength == "strong"
+    strict_path = _write_config(tmp_path, strong_min_score=100)
+    strict_result = MarketIntelligenceAgent(strict_path).run(fixture)
+    assert strict_result.recommendations[0].strength != "strong"
+
+
+def test_real_config_is_loaded_by_default():
+    agent = MarketIntelligenceAgent()
+    assert agent.config == load_v3_config()
+    assert agent.config.source_path == ROOT / "config/seo_agent_v3.json"
+
+
+def test_one_bad_review_cannot_create_high_reputation_gap():
+    review = ReviewSignal(
+        TOPIC,
+        "public-platform",
+        "aggregate competitor",
+        rating_average=2.5,
+        review_count=1,
+        observation_window="30d",
+        negative_topics=("support", "tracking", "delays"),
+        confidence=Confidence.HIGH,
+    )
+    score = score_opportunity(TOPIC, review=review)
+    assert score.reputation_gap is not DimensionLevel.HIGH
+    assert recommendation_for(score).strength != "strong"
+
+
+def test_large_coherent_review_sample_can_create_high_reputation_gap():
+    review = ReviewSignal(
+        TOPIC,
+        "public-platform",
+        "aggregate competitor",
+        rating_average=3.2,
+        review_count=500,
+        observation_window="12m",
+        negative_topics=("support", "tracking", "delays"),
+        confidence=Confidence.HIGH,
+    )
+    assert score_opportunity(TOPIC, review=review).reputation_gap is DimensionLevel.HIGH
+
+
+def test_missing_review_count_remains_unknown_without_estimation():
+    review = ReviewSignal(
+        TOPIC,
+        "public-platform",
+        "aggregate competitor",
+        rating_average=2.5,
+        review_count=None,
+        observation_window="unknown",
+        negative_topics=("support",),
+        confidence=Confidence.HIGH,
+    )
+    score = score_opportunity(TOPIC, review=review)
+    assert score.reputation_gap is DimensionLevel.UNKNOWN
+
+
+def test_confidence_is_balanced_by_source_not_evidence_row_volume():
+    dominant = tuple(evidence("many", Confidence.HIGH) for _ in range(20))
+    minority = (evidence("one", Confidence.VERY_LOW),)
+    score = score_opportunity(
+        TOPIC,
+        search=(SearchSignal(TOPIC, TOPIC, impressions=300, evidence=dominant),),
+        rank=(RankSignal(TOPIC, TOPIC, position=12, evidence=minority),),
+    )
+    assert score.confidence is Confidence.LOW
+    assert "evidence_sources=2" in score.explanation
+    assert "confidence_aggregation=equal_weight_per_evidence_source" in score.explanation
 
 
 def test_report_models_have_no_pii_fields():

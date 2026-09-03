@@ -1,8 +1,10 @@
 """Offline orchestration for V3 Phase 1."""
 
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional, Tuple
+from pathlib import Path
+from typing import Any, Mapping, Optional, Tuple
 
+from .config import V3Config, load_v3_config
 from .models import OpportunityScore, Recommendation
 from .report import render_markdown
 from .scoring import recommendation_for, score_opportunity
@@ -27,8 +29,8 @@ class AgentResult:
 class MarketIntelligenceAgent:
     """Combine normalized local fixtures without side effects or network access."""
 
-    def __init__(self, weights: Optional[Dict[str, float]] = None) -> None:
-        self.weights = weights
+    def __init__(self, config_path: Optional[Path] = None) -> None:
+        self.config: V3Config = load_v3_config(config_path)
         self.adapters = {
             "search_console": SearchConsoleFixtureSource(),
             "analytics": AnalyticsFixtureSource(),
@@ -54,7 +56,7 @@ class MarketIntelligenceAgent:
         recommendations = []
         for topic in topics:
             signals = {
-                name: next((item for item in values if item.topic == topic), None)
+                name: tuple(item for item in values if item.topic == topic)
                 for name, values in collected.items()
             }
             score = score_opportunity(
@@ -65,16 +67,22 @@ class MarketIntelligenceAgent:
                 competitor=signals["competitors"],
                 review=signals["reviews"],
                 business=signals["business_metrics"],
-                weights=self.weights,
+                weights=self.config.score_weights,
             )
             evidence = tuple(
                 evidence
-                for signal in signals.values()
-                if signal is not None
+                for signal_group in signals.values()
+                for signal in signal_group
                 for evidence in signal.evidence
             )
             scores.append(score)
-            recommendations.append(recommendation_for(score, evidence))
+            recommendations.append(
+                recommendation_for(
+                    score,
+                    evidence,
+                    policy=self.config.recommendation_policy,
+                )
+            )
         source_counts = {name: len(values) for name, values in collected.items()}
         score_tuple = tuple(scores)
         recommendation_tuple = tuple(recommendations)
