@@ -2,6 +2,9 @@ name: Colixo SEO Agent v2
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '17 8 * * 1'
+      timezone: 'Europe/Zurich'
 
 permissions:
   contents: read
