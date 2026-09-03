@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "mode": {
+    "read_only": true,
+    "proposal_only": true,
+    "network_enabled": false,
+    "site_publication_enabled": false
+  },
+  "confidence_levels": [
+    "very_low",
+    "low",
+    "medium",
+    "high"
+  ],
+  "dimension_levels": [
+    "unknown",
+    "very_low",
+    "low",
+    "medium",
+    "high"
+  ],
+  "score_weights": {
+    "search_demand": 1.2,
+    "rank_opportunity": 1.2,
+    "commercial_fit": 1.4,
+    "conversion_signal": 1.2,
+    "competitive_gap": 1.0,
+    "reputation_gap": 0.8,
+    "evidence_confidence": 1.2
+  },
+  "recommendation_policy": {
+    "strong_min_score": 75,
+    "strong_min_confidence": "medium",
+    "strong_min_known_dimensions": 4
+  },
+  "phase_1_sources": {
+    "search_console": "local_fixture",
+    "analytics": "local_fixture",
+    "rank_tracker": "local_fixture",
+    "competitors": "local_fixture",
+    "reviews": "local_fixture",
+    "business_metrics": "local_fixture"
+  },
+  "privacy": {
+    "aggregated_only": true,
+    "personal_data_allowed": false,
+    "full_review_text_allowed": false
+  }
+}
