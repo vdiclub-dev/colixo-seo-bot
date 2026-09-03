@@ -22,6 +22,7 @@ from scripts.v3.ga4_readonly_probe import (
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = ROOT / ".github/workflows/seo-v3-ga4-readonly-probe.yml"
 PROBE_PATH = ROOT / "scripts/v3/ga4_readonly_probe.py"
+LOCK_PATH = ROOT / "requirements-ga4-probe.lock"
 PROVIDER = (
     "projects/270376484474/locations/global/workloadIdentityPools/"
     "github/providers/colixo-seo-bot"
@@ -83,18 +84,72 @@ def workflow_text():
     return WORKFLOW_PATH.read_text()
 
 
-def test_workflow_is_manual_only_with_exact_permissions():
+@pytest.fixture(autouse=True)
+def forbid_network(monkeypatch):
+    monkeypatch.setattr(
+        socket,
+        "create_connection",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("network forbidden in tests")
+        ),
+    )
+
+
+def lock_entries():
+    text = LOCK_PATH.read_text()
+    starts = list(re.finditer(
+        r"(?m)^([A-Za-z0-9_.-]+)==([^\\\s]+) \\$",
+        text,
+    ))
+    entries = []
+    for index, match in enumerate(starts):
+        end = starts[index + 1].start() if index + 1 < len(starts) else len(text)
+        entries.append((match.group(1), match.group(2), text[match.start():end]))
+    return entries
+
+
+def test_workflow_is_manual_only_with_job_scoped_permissions():
     workflow = workflow_text()
     trigger_block = workflow.split("on:\n", 1)[1].split("\npermissions:", 1)[0]
-    permission_block = workflow.split("permissions:\n", 1)[1].split("\njobs:", 1)[0]
     assert trigger_block.strip() == "workflow_dispatch:"
-    assert permission_block.strip().splitlines() == [
+    assert workflow.split("permissions:", 1)[1].split("\njobs:", 1)[0].strip() == "{}"
+    job = workflow.split("  ga4-readonly-probe:\n", 1)[1]
+    job_permissions = job.split("    permissions:\n", 1)[1].split("\n\n    steps:", 1)[0]
+    assert job_permissions.strip().splitlines() == [
         "contents: read",
-        "  id-token: write",
+        "      id-token: write",
     ]
+    assert workflow.count("id-token: write") == 1
+    assert workflow.count("contents: read") == 1
+    assert workflow.count("  ga4-readonly-probe:") == 1
     assert all(trigger not in trigger_block for trigger in (
         "push:", "pull_request:", "schedule:", "workflow_call:",
     ))
+
+
+def test_workflow_uses_hash_locked_probe_dependencies_without_pip_cache():
+    workflow = workflow_text()
+    assert "--requirement requirements-ga4-probe.lock" in workflow
+    assert "--require-hashes" in workflow
+    assert "--only-binary=:all:" in workflow
+    assert "requirements.txt" not in workflow
+    assert "cache: pip" not in workflow
+
+
+def test_probe_lock_is_exact_hash_covered_and_minimal():
+    entries = lock_entries()
+    assert len(entries) == 19
+    assert all(re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+!-]*", version) for _, version, _ in entries)
+    assert all(re.search(r"--hash=sha256:[0-9a-f]{64}", block) for _, _, block in entries)
+    names = {name.lower().replace("_", "-") for name, _, _ in entries}
+    assert "google-analytics-data" in names
+    assert "openai" not in names
+    assert "python-dotenv" not in names
+    requirements = [
+        line for line in LOCK_PATH.read_text().splitlines()
+        if line and not line.startswith((" ", "#"))
+    ]
+    assert all(re.match(r"^[A-Za-z0-9_.-]+==[^<>=~* ]+ \\$", line) for line in requirements)
 
 
 def test_workflow_uses_exact_wif_identity_and_no_static_secret():
@@ -154,14 +209,7 @@ def test_request_contains_no_pii_or_query_string_dimensions():
     assert all(field not in serialized for field in prohibited)
 
 
-def test_probe_makes_exactly_one_call_and_emits_only_safe_aggregate_output(monkeypatch):
-    monkeypatch.setattr(
-        socket,
-        "create_connection",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("network forbidden in tests")
-        ),
-    )
+def test_probe_makes_exactly_one_call_and_emits_only_safe_aggregate_output():
     client = FakeClient(response((row(("12", "9", "2.5")),)))
     output = []
     result = run_probe(client=client, emit=output.append)

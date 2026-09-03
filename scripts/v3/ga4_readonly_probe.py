@@ -28,7 +28,7 @@ class ProbeResult:
 
 
 def build_request() -> Mapping[str, Any]:
-    """Build the fixed aggregate-only request for the current UTC day."""
+    """Build the fixed aggregate-only request for the current GA4 property day."""
 
     return {
         "property": PROPERTY_RESOURCE,
