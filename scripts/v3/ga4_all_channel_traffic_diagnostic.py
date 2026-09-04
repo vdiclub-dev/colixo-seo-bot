@@ -23,6 +23,23 @@ EXPECTED_REPORT_CALLS = 2
 PASS_VERDICT = "GA4_ALL_CHANNEL_TRAFFIC_DIAGNOSTIC_PASS"
 FAIL_VERDICT = "GA4_ALL_CHANNEL_TRAFFIC_DIAGNOSTIC_FAILED"
 
+ALLOWED_FAILURE_CODES = frozenset({
+    "CLIENT_CREATION_FAILED",
+    "GLOBAL_API_REQUEST_FAILED",
+    "CHANNEL_API_REQUEST_FAILED",
+    "GLOBAL_RESPONSE_SCHEMA_FAILED",
+    "GLOBAL_RESPONSE_ROWS_FAILED",
+    "GLOBAL_RESPONSE_METRIC_FAILED",
+    "CHANNEL_RESPONSE_SCHEMA_FAILED",
+    "CHANNEL_RESPONSE_ROW_FAILED",
+    "CHANNEL_VALUE_NOT_ALLOWLISTED",
+    "CHANNEL_VALUE_DUPLICATE",
+    "CHANNEL_METRIC_FAILED",
+    "CHANNEL_SUM_EXCEEDS_TOTAL",
+    "REPORT_COUNT_FAILED",
+    "UNEXPECTED_DIAGNOSTIC_FAILURE",
+})
+
 GLOBAL_DIMENSIONS: Tuple[str, ...] = ()
 CHANNEL_DIMENSIONS = GA4_CHANNEL_DIMENSIONS
 
@@ -54,6 +71,16 @@ ALLOWED_DEFAULT_CHANNELS = frozenset({
 
 class GA4AllChannelTrafficDiagnosticError(ValueError):
     """Raised when the diagnostic cannot safely trust or summarize GA4 data."""
+
+    def __init__(self, safe_code: str, report_calls_completed: int) -> None:
+        if safe_code not in ALLOWED_FAILURE_CODES:
+            safe_code = "UNEXPECTED_DIAGNOSTIC_FAILURE"
+        if report_calls_completed not in (0, 1, 2):
+            safe_code = "REPORT_COUNT_FAILED"
+            report_calls_completed = 0
+        self.safe_code = safe_code
+        self.report_calls_completed = report_calls_completed
+        super().__init__(safe_code)
 
 
 @dataclass(frozen=True)
@@ -105,7 +132,9 @@ class RecordingClient:
 
     def __init__(self, client: Any) -> None:
         if client is None:
-            raise GA4AllChannelTrafficDiagnosticError("GA4 client is required")
+            raise GA4AllChannelTrafficDiagnosticError(
+                "CLIENT_CREATION_FAILED", 0
+            )
         self.client = client
         self.requests = []
         self.responses = []
@@ -118,10 +147,20 @@ class RecordingClient:
         request_index = len(self.requests)
         if request_index >= EXPECTED_REPORT_CALLS or request != expected[request_index]:
             raise GA4AllChannelTrafficDiagnosticError(
-                "GA4 request does not match the diagnostic contract"
+                "REPORT_COUNT_FAILED", len(self.responses)
             )
         self.requests.append(request)
-        response = self.client.run_report(request=request)
+        try:
+            response = self.client.run_report(request=request)
+        except Exception:
+            failure_code = (
+                "GLOBAL_API_REQUEST_FAILED"
+                if request_index == 0
+                else "CHANNEL_API_REQUEST_FAILED"
+            )
+            raise GA4AllChannelTrafficDiagnosticError(
+                failure_code, len(self.responses)
+            ) from None
         self.responses.append(response)
         return response
 
@@ -134,7 +173,14 @@ def run_diagnostic(
     """Execute two aggregate reports and emit only allowlisted channel totals."""
 
     try:
-        client = RecordingClient(client_factory())
+        raw_client = client_factory()
+    except Exception:
+        raise GA4AllChannelTrafficDiagnosticError(
+            "CLIENT_CREATION_FAILED", 0
+        ) from None
+
+    try:
+        client = RecordingClient(raw_client)
         client.run_report(request=_build_request(GLOBAL_DIMENSIONS))
         client.run_report(request=_build_request(CHANNEL_DIMENSIONS))
         if (
@@ -142,13 +188,15 @@ def run_diagnostic(
             or len(client.responses) != EXPECTED_REPORT_CALLS
         ):
             raise GA4AllChannelTrafficDiagnosticError(
-                "GA4 report count does not match the diagnostic contract"
+                "REPORT_COUNT_FAILED", len(client.responses)
             )
         result = _build_result(client.responses)
         output = _safe_output(result)
+    except GA4AllChannelTrafficDiagnosticError:
+        raise
     except Exception:
         raise GA4AllChannelTrafficDiagnosticError(
-            "GA4 all-channel traffic diagnostic failed"
+            "UNEXPECTED_DIAGNOSTIC_FAILURE", len(client.responses)
         ) from None
 
     for line in output:
@@ -168,7 +216,12 @@ def _build_request(dimensions: Tuple[str, ...]) -> Mapping[str, Any]:
 
 
 def _build_result(responses: Iterable[Any]) -> DiagnosticResult:
-    global_response, channel_response = tuple(responses)
+    retained_responses = tuple(responses)
+    if len(retained_responses) != EXPECTED_REPORT_CALLS:
+        raise GA4AllChannelTrafficDiagnosticError(
+            "REPORT_COUNT_FAILED", min(len(retained_responses), 2)
+        )
+    global_response, channel_response = retained_responses
     totals = _parse_global_response(global_response)
     channels = _parse_channel_response(channel_response)
     channel_sums = Metrics()
@@ -176,7 +229,7 @@ def _build_result(responses: Iterable[Any]) -> DiagnosticResult:
         channel_sums += channel.metrics
     if channel_sums.exceeds(totals):
         raise GA4AllChannelTrafficDiagnosticError(
-            "GA4 channel sums exceed global totals"
+            "CHANNEL_SUM_EXCEEDS_TOTAL", 2
         )
     organic_search = next(
         (
@@ -197,82 +250,127 @@ def _build_result(responses: Iterable[Any]) -> DiagnosticResult:
 
 
 def _parse_global_response(response: Any) -> Metrics:
-    _validate_headers(response, GLOBAL_DIMENSIONS)
-    rows = tuple(getattr(response, "rows", ()) or ())
+    _validate_headers(
+        response, GLOBAL_DIMENSIONS, "GLOBAL_RESPONSE_SCHEMA_FAILED"
+    )
+    rows = _response_rows(response, "GLOBAL_RESPONSE_ROWS_FAILED")
     if len(rows) > 1:
         raise GA4AllChannelTrafficDiagnosticError(
-            "GA4 global response contains unexpected rows"
+            "GLOBAL_RESPONSE_ROWS_FAILED", 2
         )
     if not rows:
         return Metrics()
-    dimensions, metrics = _row_values(rows[0], 0)
+    dimensions = _row_dimensions(
+        rows[0], 0, "GLOBAL_RESPONSE_ROWS_FAILED"
+    )
     if dimensions:
         raise GA4AllChannelTrafficDiagnosticError(
-            "GA4 global response contains an unexpected dimension"
+            "GLOBAL_RESPONSE_ROWS_FAILED", 2
         )
-    return metrics
+    return _row_metrics(rows[0], "GLOBAL_RESPONSE_METRIC_FAILED")
 
 
 def _parse_channel_response(response: Any) -> Tuple[ChannelSummary, ...]:
-    _validate_headers(response, CHANNEL_DIMENSIONS)
+    _validate_headers(
+        response, CHANNEL_DIMENSIONS, "CHANNEL_RESPONSE_SCHEMA_FAILED"
+    )
     channels = []
     seen = set()
-    for row in tuple(getattr(response, "rows", ()) or ()):
-        dimensions, metrics = _row_values(row, len(CHANNEL_DIMENSIONS))
+    for row in _response_rows(response, "CHANNEL_RESPONSE_ROW_FAILED"):
+        dimensions = _row_dimensions(
+            row, len(CHANNEL_DIMENSIONS), "CHANNEL_RESPONSE_ROW_FAILED"
+        )
+        metrics = _row_metrics(row, "CHANNEL_METRIC_FAILED")
         channel = dimensions[0]
-        if channel not in ALLOWED_DEFAULT_CHANNELS or channel in seen:
+        if channel not in ALLOWED_DEFAULT_CHANNELS:
             raise GA4AllChannelTrafficDiagnosticError(
-                "GA4 channel response contains an unexpected value"
+                "CHANNEL_VALUE_NOT_ALLOWLISTED", 2
+            )
+        if channel in seen:
+            raise GA4AllChannelTrafficDiagnosticError(
+                "CHANNEL_VALUE_DUPLICATE", 2
             )
         seen.add(channel)
         channels.append(ChannelSummary(channel, metrics))
     return tuple(sorted(channels, key=lambda item: item.name))
 
 
-def _validate_headers(response: Any, dimensions: Tuple[str, ...]) -> None:
+def _validate_headers(
+    response: Any,
+    dimensions: Tuple[str, ...],
+    failure_code: str,
+) -> None:
     if response is None:
-        raise GA4AllChannelTrafficDiagnosticError("GA4 response is missing")
-    actual_dimensions = tuple(
-        str(getattr(item, "name", ""))
-        for item in tuple(getattr(response, "dimension_headers", ()) or ())
-    )
-    actual_metrics = tuple(
-        str(getattr(item, "name", ""))
-        for item in tuple(getattr(response, "metric_headers", ()) or ())
-    )
-    if actual_dimensions != dimensions or actual_metrics != GA4_METRICS:
-        raise GA4AllChannelTrafficDiagnosticError(
-            "GA4 response schema is unexpected"
+        raise GA4AllChannelTrafficDiagnosticError(failure_code, 2)
+    try:
+        actual_dimensions = tuple(
+            str(getattr(item, "name", ""))
+            for item in tuple(getattr(response, "dimension_headers", ()) or ())
         )
+        actual_metrics = tuple(
+            str(getattr(item, "name", ""))
+            for item in tuple(getattr(response, "metric_headers", ()) or ())
+        )
+    except Exception:
+        raise GA4AllChannelTrafficDiagnosticError(failure_code, 2) from None
+    if actual_dimensions != dimensions or actual_metrics != GA4_METRICS:
+        raise GA4AllChannelTrafficDiagnosticError(failure_code, 2)
 
 
-def _row_values(row: Any, dimension_count: int) -> Tuple[Tuple[str, ...], Metrics]:
-    dimensions = tuple(
-        str(getattr(item, "value", ""))
-        for item in tuple(getattr(row, "dimension_values", ()) or ())
-    )
-    values = tuple(
-        _parse_metric(getattr(item, "value", None))
-        for item in tuple(getattr(row, "metric_values", ()) or ())
-    )
-    if (
-        len(dimensions) != dimension_count
-        or any(not value for value in dimensions)
-        or len(values) != len(GA4_METRICS)
-    ):
-        raise GA4AllChannelTrafficDiagnosticError("GA4 response row is malformed")
-    return dimensions, Metrics(*values)
+def _response_rows(response: Any, failure_code: str) -> Tuple[Any, ...]:
+    try:
+        return tuple(getattr(response, "rows", ()) or ())
+    except Exception:
+        raise GA4AllChannelTrafficDiagnosticError(failure_code, 2) from None
 
 
-def _parse_metric(value: Any) -> Decimal:
+def _row_dimensions(
+    row: Any,
+    dimension_count: int,
+    failure_code: str,
+) -> Tuple[str, ...]:
+    if row is None or not hasattr(row, "dimension_values"):
+        raise GA4AllChannelTrafficDiagnosticError(failure_code, 2)
+    try:
+        dimensions = tuple(
+            str(getattr(item, "value", ""))
+            for item in tuple(getattr(row, "dimension_values", ()) or ())
+        )
+    except Exception:
+        raise GA4AllChannelTrafficDiagnosticError(failure_code, 2) from None
+    if len(dimensions) != dimension_count or any(not value for value in dimensions):
+        raise GA4AllChannelTrafficDiagnosticError(failure_code, 2)
+    return dimensions
+
+
+def _row_metrics(row: Any, failure_code: str) -> Metrics:
+    try:
+        raw_values = tuple(getattr(row, "metric_values", ()) or ())
+    except Exception:
+        raise GA4AllChannelTrafficDiagnosticError(failure_code, 2) from None
+    if len(raw_values) != len(GA4_METRICS):
+        raise GA4AllChannelTrafficDiagnosticError(failure_code, 2)
+    try:
+        values = tuple(
+            _parse_metric(getattr(item, "value", None), failure_code)
+            for item in raw_values
+        )
+    except GA4AllChannelTrafficDiagnosticError:
+        raise
+    except Exception:
+        raise GA4AllChannelTrafficDiagnosticError(failure_code, 2) from None
+    return Metrics(*values)
+
+
+def _parse_metric(value: Any, failure_code: str) -> Decimal:
     if value is None or isinstance(value, bool):
-        raise GA4AllChannelTrafficDiagnosticError("GA4 metric is invalid")
+        raise GA4AllChannelTrafficDiagnosticError(failure_code, 2)
     try:
         parsed = Decimal(str(value))
-    except (InvalidOperation, ValueError):
-        raise GA4AllChannelTrafficDiagnosticError("GA4 metric is invalid") from None
+    except (InvalidOperation, TypeError, ValueError):
+        raise GA4AllChannelTrafficDiagnosticError(failure_code, 2) from None
     if not parsed.is_finite() or parsed < 0:
-        raise GA4AllChannelTrafficDiagnosticError("GA4 metric is invalid")
+        raise GA4AllChannelTrafficDiagnosticError(failure_code, 2)
     return parsed
 
 
@@ -337,6 +435,22 @@ def _safe_output(result: DiagnosticResult) -> Tuple[str, ...]:
     return tuple(lines)
 
 
+def _safe_failure_output(
+    failure: GA4AllChannelTrafficDiagnosticError,
+) -> Tuple[str, ...]:
+    return (
+        "PROPERTY_ID={}".format(PROPERTY_ID),
+        "AUTH_MODE={}".format(AUTH_MODE),
+        "START_DATE={}".format(START_DATE),
+        "END_DATE={}".format(END_DATE),
+        "SAFE_FAILURE_CODE={}".format(failure.safe_code),
+        "REPORT_CALLS_COMPLETED={}".format(
+            failure.report_calls_completed
+        ),
+        "FINAL_VERDICT={}".format(FAIL_VERDICT),
+    )
+
+
 def _format_decimal(value: Decimal) -> str:
     rendered = format(value, "f")
     if "." in rendered:
@@ -347,8 +461,16 @@ def _format_decimal(value: Decimal) -> str:
 def main() -> int:
     try:
         run_diagnostic()
+    except GA4AllChannelTrafficDiagnosticError as failure:
+        for line in _safe_failure_output(failure):
+            print(line)
+        return 1
     except Exception:
-        print("FINAL_VERDICT={}".format(FAIL_VERDICT))
+        failure = GA4AllChannelTrafficDiagnosticError(
+            "UNEXPECTED_DIAGNOSTIC_FAILURE", 0
+        )
+        for line in _safe_failure_output(failure):
+            print(line)
         return 1
     return 0
 

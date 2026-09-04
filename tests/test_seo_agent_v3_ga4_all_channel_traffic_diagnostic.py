@@ -10,6 +10,7 @@ import pytest
 from scripts.v3 import ga4_all_channel_traffic_diagnostic as diagnostic_module
 from scripts.v3.ga4_all_channel_traffic_diagnostic import (
     ALLOWED_DEFAULT_CHANNELS,
+    ALLOWED_FAILURE_CODES,
     AUTH_MODE,
     END_DATE,
     EXPECTED_REPORT_CALLS,
@@ -69,6 +70,19 @@ class FakeClient:
         return self.responses.pop(0)
 
 
+class SequencedClient:
+    def __init__(self, *outcomes):
+        self.outcomes = list(outcomes)
+        self.requests = []
+
+    def run_report(self, *, request):
+        self.requests.append(request)
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
 def response(dimensions, rows=(), metrics=GA4_METRICS):
     return Response(
         dimension_headers=tuple(Header(name) for name in dimensions),
@@ -101,6 +115,29 @@ def execute(client):
     output = []
     result = run_diagnostic(client_factory=lambda: client, emit=output.append)
     return result, output
+
+
+def render_failure(monkeypatch, capsys, client_factory):
+    original_run_diagnostic = diagnostic_module.run_diagnostic
+
+    def invoke():
+        return original_run_diagnostic(client_factory=client_factory)
+
+    monkeypatch.setattr(diagnostic_module, "run_diagnostic", invoke)
+    assert diagnostic_module.main() == 1
+    return capsys.readouterr().out.strip().splitlines()
+
+
+def assert_failure_output(lines, expected_code, expected_calls):
+    assert lines == [
+        "PROPERTY_ID=552715460",
+        "AUTH_MODE=WIF",
+        "START_DATE=2026-09-03",
+        "END_DATE=2026-09-03",
+        "SAFE_FAILURE_CODE={}".format(expected_code),
+        "REPORT_CALLS_COMPLETED={}".format(expected_calls),
+        "FINAL_VERDICT=GA4_ALL_CHANNEL_TRAFFIC_DIAGNOSTIC_FAILED",
+    ]
 
 
 @pytest.fixture(autouse=True)
@@ -331,29 +368,240 @@ def test_output_uses_only_allowlisted_aggregate_keys_and_no_forbidden_dimensions
     ))
 
 
-def test_api_failure_is_sanitized_and_main_emits_only_failure_verdict(
+def test_failure_code_allowlist_is_exact_and_channel_allowlist_is_unchanged():
+    assert ALLOWED_FAILURE_CODES == frozenset({
+        "CLIENT_CREATION_FAILED",
+        "GLOBAL_API_REQUEST_FAILED",
+        "CHANNEL_API_REQUEST_FAILED",
+        "GLOBAL_RESPONSE_SCHEMA_FAILED",
+        "GLOBAL_RESPONSE_ROWS_FAILED",
+        "GLOBAL_RESPONSE_METRIC_FAILED",
+        "CHANNEL_RESPONSE_SCHEMA_FAILED",
+        "CHANNEL_RESPONSE_ROW_FAILED",
+        "CHANNEL_VALUE_NOT_ALLOWLISTED",
+        "CHANNEL_VALUE_DUPLICATE",
+        "CHANNEL_METRIC_FAILED",
+        "CHANNEL_SUM_EXCEEDS_TOTAL",
+        "REPORT_COUNT_FAILED",
+        "UNEXPECTED_DIAGNOSTIC_FAILURE",
+    })
+    assert ALLOWED_DEFAULT_CHANNELS == frozenset({
+        "Affiliates", "AI Assistant", "Audio", "Cross-network", "Direct",
+        "Display", "Email", "Mobile Push Notifications", "Organic Search",
+        "Organic Shopping", "Organic Social", "Organic Video", "Paid Other",
+        "Paid Search", "Paid Shopping", "Paid Social", "Paid Video",
+        "Referral", "SMS", "Unassigned",
+    })
+
+
+def _raise_client_creation_failure():
+    raise RuntimeError(
+        "Bearer token JWT private@example.invalid /credential/private-key.json"
+    )
+
+
+@pytest.mark.parametrize(("expected_code", "expected_calls", "factory"), (
+    (
+        "CLIENT_CREATION_FAILED",
+        0,
+        _raise_client_creation_failure,
+    ),
+    (
+        "GLOBAL_API_REQUEST_FAILED",
+        0,
+        lambda: SequencedClient(RuntimeError(
+            "Authorization: Bearer secret.jwt /credential/path?query=private"
+        )),
+    ),
+    (
+        "CHANNEL_API_REQUEST_FAILED",
+        1,
+        lambda: SequencedClient(
+            response((), (row((), (12, 9, 3)),)),
+            RuntimeError("private-key https://example.invalid/?token=secret"),
+        ),
+    ),
+    (
+        "GLOBAL_RESPONSE_SCHEMA_FAILED",
+        2,
+        lambda: FakeClient(
+            response(("private@example.invalid",), (row((), (1, 1, 0)),)),
+            response(GA4_CHANNEL_DIMENSIONS),
+        ),
+    ),
+    (
+        "GLOBAL_RESPONSE_ROWS_FAILED",
+        2,
+        lambda: FakeClient(
+            response((), (
+                row((), (1, 1, 0)),
+                row((), (2, 2, 0)),
+            )),
+            response(GA4_CHANNEL_DIMENSIONS),
+        ),
+    ),
+    (
+        "GLOBAL_RESPONSE_ROWS_FAILED",
+        2,
+        lambda: FakeClient(
+            response((), (row(("unexpected-zero-dimension",), (1, 1, 0)),)),
+            response(GA4_CHANNEL_DIMENSIONS),
+        ),
+    ),
+    (
+        "GLOBAL_RESPONSE_METRIC_FAILED",
+        2,
+        lambda: FakeClient(
+            response((), (row((), ("secret.jwt", 1, 0)),)),
+            response(GA4_CHANNEL_DIMENSIONS),
+        ),
+    ),
+    (
+        "CHANNEL_RESPONSE_SCHEMA_FAILED",
+        2,
+        lambda: FakeClient(
+            response((), (row((), (1, 1, 0)),)),
+            response(("source?campaign=private",)),
+        ),
+    ),
+    (
+        "CHANNEL_RESPONSE_ROW_FAILED",
+        2,
+        lambda: FakeClient(
+            response((), (row((), (1, 1, 0)),)),
+            response(GA4_CHANNEL_DIMENSIONS, (row((), (1, 1, 0)),)),
+        ),
+    ),
+    (
+        "CHANNEL_VALUE_NOT_ALLOWLISTED",
+        2,
+        lambda: FakeClient(
+            response((), (row((), (1, 1, 0)),)),
+            response(GA4_CHANNEL_DIMENSIONS, (
+                row(("https://private.example/?email=pii@example.invalid",),
+                    (1, 1, 0)),
+            )),
+        ),
+    ),
+    (
+        "CHANNEL_VALUE_DUPLICATE",
+        2,
+        lambda: FakeClient(
+            response((), (row((), (2, 2, 0)),)),
+            response(GA4_CHANNEL_DIMENSIONS, (
+                row(("Direct",), (1, 1, 0)),
+                row(("Direct",), (1, 1, 0)),
+            )),
+        ),
+    ),
+    (
+        "CHANNEL_METRIC_FAILED",
+        2,
+        lambda: FakeClient(
+            response((), (row((), (1, 1, 0)),)),
+            response(GA4_CHANNEL_DIMENSIONS, (
+                row(("Direct",), ("Authorization Bearer secret", 1, 0)),
+            )),
+        ),
+    ),
+    (
+        "CHANNEL_SUM_EXCEEDS_TOTAL",
+        2,
+        lambda: FakeClient(
+            response((), (row((), (1, 1, 0)),)),
+            response(GA4_CHANNEL_DIMENSIONS, (
+                row(("Direct",), (2, 1, 0)),
+            )),
+        ),
+    ),
+))
+def test_safe_failure_codes_and_retained_response_counts(
+    monkeypatch, capsys, expected_code, expected_calls, factory
+):
+    lines = render_failure(monkeypatch, capsys, factory)
+    assert_failure_output(lines, expected_code, expected_calls)
+
+
+def test_report_count_invariant_has_safe_failure_code(monkeypatch, capsys):
+    class MiscountingRecordingClient:
+        def __init__(self, client):
+            self.client = client
+            self.requests = []
+            self.responses = []
+
+        def run_report(self, *, request):
+            self.requests.append(request)
+            return self.client.run_report(request=request)
+
+    monkeypatch.setattr(
+        diagnostic_module, "RecordingClient", MiscountingRecordingClient
+    )
+    lines = render_failure(monkeypatch, capsys, lambda: client_for())
+    assert_failure_output(lines, "REPORT_COUNT_FAILED", 0)
+
+
+def test_unexpected_internal_failure_is_sanitized_after_two_reports(
     monkeypatch, capsys
 ):
-    class FailingClient:
-        def run_report(self, *, request):
-            raise RuntimeError("token /credential/path?email=private@example.invalid")
+    def fail_with_private_data(_responses):
+        raise RuntimeError(
+            "JWT Authorization private@example.invalid "
+            "https://example.invalid/?token=secret /credential/private-key.json"
+        )
 
-    output = []
-    with pytest.raises(GA4AllChannelTrafficDiagnosticError) as failure:
-        run_diagnostic(client_factory=FailingClient, emit=output.append)
-    assert output == []
-    assert all(value not in str(failure.value) for value in (
-        "token", "credential", "email", "private@example",
+    monkeypatch.setattr(diagnostic_module, "_build_result", fail_with_private_data)
+    lines = render_failure(monkeypatch, capsys, lambda: client_for())
+    assert_failure_output(lines, "UNEXPECTED_DIAGNOSTIC_FAILURE", 2)
+
+
+@pytest.mark.parametrize("factory", (
+    lambda: SequencedClient(RuntimeError(
+        "Authorization Bearer eyJhbGciOiJub25lIn0.secret.signature "
+        "/credential/private-key.json https://example.invalid/?token=secret "
+        "private@example.invalid"
+    )),
+    lambda: FakeClient(
+        response((), (row((), (1, 1, 0)),)),
+        response(GA4_CHANNEL_DIMENSIONS, (
+            row((
+                "https://example.invalid/private?token=secret&email="
+                "private@example.invalid",
+            ), (1, 1, 0)),
+        )),
+    ),
+))
+def test_failure_output_never_contains_raw_or_sensitive_values(
+    monkeypatch, capsys, factory
+):
+    rendered = "\n".join(render_failure(monkeypatch, capsys, factory))
+    lowered = rendered.lower()
+    assert len(rendered.splitlines()) == 7
+    assert all(value not in lowered for value in (
+        "private@example.invalid",
+        "https://",
+        "?token=",
+        "/credential/",
+        "bearer",
+        "authorization",
+        "eyjhbgcioijub25lin0",
+        "private-key",
+        "secret",
     ))
 
+
+def test_untyped_main_failure_uses_only_safe_fallback(monkeypatch, capsys):
     monkeypatch.setattr(
         diagnostic_module,
         "run_diagnostic",
-        lambda: (_ for _ in ()).throw(RuntimeError("secret token")),
+        lambda: (_ for _ in ()).throw(RuntimeError(
+            "Authorization token private@example.invalid"
+        )),
     )
     assert diagnostic_module.main() == 1
-    assert capsys.readouterr().out == (
-        "FINAL_VERDICT=GA4_ALL_CHANNEL_TRAFFIC_DIAGNOSTIC_FAILED\n"
+    assert_failure_output(
+        capsys.readouterr().out.strip().splitlines(),
+        "UNEXPECTED_DIAGNOSTIC_FAILURE",
+        0,
     )
 
 
