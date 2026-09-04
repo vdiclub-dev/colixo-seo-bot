@@ -165,13 +165,7 @@ class GoogleAnalyticsDataSource:
         totals = tuple(getattr(response, "totals", ()) or ())
         if len(totals) != 1:
             raise GA4DataSourceError("GA4 response must contain exactly one total row")
-        dimensions, metrics = self._row_values(totals[0], "TOTAL")
-        if dimensions != (
-            GA4_TOTAL_DIMENSION_VALUE,
-            GA4_TOTAL_DIMENSION_VALUE,
-        ):
-            raise GA4DataSourceError("GA4 total row dimensions are unexpected")
-        return metrics
+        return self._metric_values(totals[0], "TOTAL")
 
     def _parse_landing_page_response(
         self, response: Any
@@ -244,6 +238,11 @@ class GoogleAnalyticsDataSource:
             raise GA4DataSourceError(
                 "{}_ROW_DIMENSION_VALUE_INVALID".format(context)
             )
+        return dimensions, self._metric_values(row, context)
+
+    def _metric_values(
+        self, row: Any, context: str
+    ) -> Tuple[Decimal, Decimal, Decimal]:
         raw_metrics = tuple(
             getattr(item, "value", None)
             for item in tuple(getattr(row, "metric_values", ()) or ())
@@ -252,8 +251,7 @@ class GoogleAnalyticsDataSource:
             raise GA4DataSourceError(
                 "{}_ROW_METRIC_COUNT_INVALID".format(context)
             )
-        metrics = tuple(_parse_metric(value, context) for value in raw_metrics)
-        return dimensions, metrics
+        return tuple(_parse_metric(value, context) for value in raw_metrics)
 
     def _aggregate_rows(
         self,
