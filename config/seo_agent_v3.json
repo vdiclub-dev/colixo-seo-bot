@@ -41,6 +41,17 @@
     "reviews": "local_fixture",
     "business_metrics": "local_fixture"
   },
+  "network_policy": {
+    "default": "deny",
+    "sources": {
+      "search_console": "deny",
+      "analytics": "deny",
+      "rank_tracker": "deny",
+      "competitors": "deny",
+      "reviews": "deny",
+      "business_metrics": "deny"
+    }
+  },
   "ga4_data_api": {
     "enabled": false,
     "property_id": "552715460",
