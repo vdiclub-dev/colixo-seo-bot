@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from scripts.v3.models import DimensionLevel
+from scripts.v3.scoring import recommendation_for, score_opportunity
 from scripts.v3.sources.analytics import (
     DEFAULT_GA4_LANDING_PAGE_TOPICS,
     GA4_CHANNEL_DIMENSIONS,
@@ -215,7 +217,7 @@ def test_ga4_metrics_map_to_existing_traffic_signal_and_evidence():
     assert signal.topic == "business_delivery"
     assert signal.organic_sessions == 12
     assert signal.engaged_sessions == 9
-    assert signal.conversions == 2.5
+    assert signal.conversions is None
     proof = signal.evidence[0]
     assert proof.source == "google_analytics_4"
     assert proof.observed_at == "2026-09-03"
@@ -233,7 +235,40 @@ def test_ga4_metrics_map_to_existing_traffic_signal_and_evidence():
         "key_events": 3.0,
     }
     assert proof.fact["landing_pages"] == ("/business-plus",)
+    assert proof.fact["key_events"] == 2.5
     assert "page_paths" not in proof.fact
+
+
+def test_ga4_small_zero_key_event_sample_is_telemetry_only_and_scores_weak():
+    client = fake_client(
+        (row(("/", ORGANIC_SEARCH_CHANNEL), ("6", "4", "0")),),
+        channel_rows=(row((ORGANIC_SEARCH_CHANNEL,), ("6", "4", "0")),),
+    )
+    signal = adapter(client).collect()[0]
+    score = score_opportunity(signal.topic, traffic=signal)
+
+    assert signal.organic_sessions == 6
+    assert signal.conversions is None
+    assert signal.evidence[0].confidence.value == "high"
+    assert signal.evidence[0].fact["key_events"] == 0
+    assert score.conversion_signal is DimensionLevel.UNKNOWN
+    assert score.final_score == 0
+    assert recommendation_for(score).strength == "weak"
+
+
+def test_ga4_positive_key_events_are_retained_but_not_commercial_conversions():
+    client = fake_client(
+        (row(("/", ORGANIC_SEARCH_CHANNEL), ("100", "70", "7")),),
+        channel_rows=(row((ORGANIC_SEARCH_CHANNEL,), ("100", "70", "7")),),
+    )
+    signal = adapter(client).collect()[0]
+
+    assert signal.organic_sessions == 100
+    assert signal.conversions is None
+    assert signal.evidence[0].fact["key_events"] == 7
+    assert score_opportunity(
+        signal.topic, traffic=signal
+    ).conversion_signal is DimensionLevel.UNKNOWN
 
 
 def test_known_landing_pages_map_to_their_explicit_topics():
@@ -305,7 +340,8 @@ def test_multiple_rows_per_topic_are_aggregated_deterministically():
     assert tuple(item.topic for item in first) == ("parcel_delivery", "wine_delivery")
     assert first[0].organic_sessions == 11
     assert first[0].engaged_sessions == 8
-    assert first[0].conversions == 3
+    assert first[0].conversions is None
+    assert first[0].evidence[0].fact["key_events"] == 3
 
 
 def test_unknown_and_legal_landing_pages_are_explicitly_excluded():
