@@ -61,6 +61,7 @@ class Response:
     metric_headers: tuple
     rows: tuple
     totals: tuple
+    row_count: object
 
 
 class FakeClient:
@@ -89,6 +90,7 @@ def response(
     total_rows=_DEFAULT_TOTAL_ROWS,
     dimensions=GA4_LANDING_PAGE_DIMENSIONS,
     metrics=GA4_METRICS,
+    row_count=None,
 ):
     if total_rows is _DEFAULT_TOTAL_ROWS:
         total_rows = (row(
@@ -100,6 +102,7 @@ def response(
         metric_headers=tuple(Header(name) for name in metrics),
         rows=tuple(rows),
         totals=tuple(total_rows),
+        row_count=row_count,
     )
 
 
@@ -221,6 +224,29 @@ def test_zero_ga4_topics_is_a_successful_single_call_runtime_report():
     assert "0 opportunity topic(s) evaluated" in execution.result.markdown
     assert "No observed data" in execution.result.markdown
     assert "analytics=ga4_data_api(read-only)" in execution.result.markdown
+
+
+def test_verified_empty_ga4_response_is_a_successful_runtime_report():
+    client = FakeClient(response(
+        rows=(),
+        total_rows=(row((), ()),),
+        row_count=0,
+    ))
+    output = []
+
+    execution = run_runtime_report(
+        observed_at="2026-09-04",
+        client_factory=lambda: client,
+        emit=output.append,
+    )
+
+    assert len(client.requests) == execution.report_calls == 1
+    assert execution.result.scores == ()
+    assert execution.result.recommendations == ()
+    assert "REPORT_CALLS=1" in output
+    assert "TOPIC_COUNT=0" in output
+    assert "RECOMMENDATION_COUNT=0" in output
+    assert output[-1] == "FINAL_VERDICT={}".format(PASS_VERDICT)
 
 
 def test_mapped_ga4_topic_preserves_non_conversion_semantics_and_provenance():

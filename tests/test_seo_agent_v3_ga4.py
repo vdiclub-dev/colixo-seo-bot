@@ -49,6 +49,7 @@ class Response:
     metric_headers: tuple
     rows: tuple
     totals: tuple
+    row_count: object
 
 
 class FakeClient:
@@ -71,12 +72,14 @@ def response(
     rows=(),
     totals=(),
     metrics=GA4_METRICS,
+    row_count=None,
 ):
     return Response(
         dimension_headers=tuple(Header(name) for name in dimensions),
         metric_headers=tuple(Header(name) for name in metrics),
         rows=tuple(rows),
         totals=tuple(totals),
+        row_count=row_count,
     )
 
 
@@ -87,14 +90,19 @@ def row(dimensions, metrics):
     )
 
 
-def fake_client(landing_rows=(), total_metrics=("20", "15", "3"), total_rows=None):
+def fake_client(
+    landing_rows=(),
+    total_metrics=("20", "15", "3"),
+    total_rows=None,
+    row_count=None,
+):
     if total_rows is None:
         total_rows = (row(
             (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE),
             total_metrics,
         ),)
     return FakeClient(
-        response(rows=landing_rows, totals=total_rows),
+        response(rows=landing_rows, totals=total_rows, row_count=row_count),
     )
 
 
@@ -370,6 +378,83 @@ def test_missing_or_multiple_total_rows_fail_closed():
     multiple = fake_client(total_rows=(total, total))
     with pytest.raises(GA4DataSourceError, match="exactly one total row"):
         adapter(multiple).collect()
+
+
+def test_verified_zero_row_empty_total_metrics_normalize_to_zero():
+    total = row((), ())
+    client = fake_client(total_rows=(total,), row_count=0)
+
+    assert adapter(client).collect() == ()
+    assert len(client.requests) == 1
+
+
+def test_zero_row_explicit_three_zero_total_metrics_use_normal_parser():
+    total = row((), ("0", "0", "0"))
+    client = fake_client(total_rows=(total,), row_count=0)
+
+    assert adapter(client).collect() == ()
+    assert len(client.requests) == 1
+
+
+@pytest.mark.parametrize("row_count", [None, True, "0", 0.0, -1, 1])
+def test_empty_total_metrics_require_exact_integer_zero_row_count(row_count):
+    total = row((), ())
+    client = fake_client(total_rows=(total,), row_count=row_count)
+
+    with pytest.raises(
+        GA4DataSourceError,
+        match="^TOTAL_ROW_METRIC_COUNT_INVALID$",
+    ):
+        adapter(client).collect()
+
+
+def test_empty_total_metrics_fail_when_row_count_attribute_is_missing():
+    total = row((), ())
+    payload = SimpleNamespace(
+        dimension_headers=tuple(
+            Header(name) for name in GA4_LANDING_PAGE_DIMENSIONS
+        ),
+        metric_headers=tuple(Header(name) for name in GA4_METRICS),
+        rows=(),
+        totals=(total,),
+    )
+
+    with pytest.raises(
+        GA4DataSourceError,
+        match="^TOTAL_ROW_METRIC_COUNT_INVALID$",
+    ):
+        adapter(FakeClient(payload)).collect()
+
+
+def test_empty_total_metrics_fail_when_landing_rows_are_present():
+    total = row((), ())
+    landing = row(("/", ORGANIC_SEARCH_CHANNEL), ("1", "1", "0"))
+    client = fake_client((landing,), total_rows=(total,), row_count=0)
+
+    with pytest.raises(
+        GA4DataSourceError,
+        match="^TOTAL_ROW_METRIC_COUNT_INVALID$",
+    ):
+        adapter(client).collect()
+
+
+@pytest.mark.parametrize(
+    "metrics",
+    [
+        ("0",),
+        ("0", "0"),
+        ("0", "0", "0", "0"),
+    ],
+)
+def test_partial_or_extra_total_metrics_never_normalize(metrics):
+    total = row((), metrics)
+    client = fake_client(total_rows=(total,), row_count=0)
+
+    with pytest.raises(
+        GA4DataSourceError,
+        match="^TOTAL_ROW_METRIC_COUNT_INVALID$",
+    ):
+        adapter(client).collect()
 
 
 @pytest.mark.parametrize(

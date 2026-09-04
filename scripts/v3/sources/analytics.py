@@ -165,7 +165,29 @@ class GoogleAnalyticsDataSource:
         totals = tuple(getattr(response, "totals", ()) or ())
         if len(totals) != 1:
             raise GA4DataSourceError("GA4 response must contain exactly one total row")
+        metric_values = getattr(totals[0], "metric_values", None)
+        if metric_values is not None:
+            try:
+                raw_metrics = tuple(metric_values)
+            except TypeError:
+                raw_metrics = None
+            if raw_metrics == () and self._is_verified_empty_response(response):
+                return (Decimal(0), Decimal(0), Decimal(0))
         return self._metric_values(totals[0], "TOTAL")
+
+    @staticmethod
+    def _is_verified_empty_response(response: Any) -> bool:
+        row_count = getattr(response, "row_count", None)
+        if type(row_count) is not int or row_count != 0:
+            return False
+        missing = object()
+        rows = getattr(response, "rows", missing)
+        if rows is missing:
+            return False
+        try:
+            return tuple(rows or ()) == ()
+        except TypeError:
+            return False
 
     def _parse_landing_page_response(
         self, response: Any
