@@ -11,11 +11,11 @@ from scripts.v3.models import DimensionLevel
 from scripts.v3.scoring import recommendation_for, score_opportunity
 from scripts.v3.sources.analytics import (
     DEFAULT_GA4_LANDING_PAGE_TOPICS,
-    GA4_CHANNEL_DIMENSIONS,
     GA4_METRICS,
     GA4_LANDING_PAGE_DIMENSIONS,
     GA4_PROPERTY_ID,
     GA4_RESOURCE,
+    GA4_TOTAL_DIMENSION_VALUE,
     ORGANIC_SEARCH_CHANNEL,
     AnalyticsFixtureSource,
     GA4DataSourceError,
@@ -48,26 +48,35 @@ class Response:
     dimension_headers: tuple
     metric_headers: tuple
     rows: tuple
+    totals: tuple
 
 
 class FakeClient:
-    def __init__(self, *responses):
-        self.responses = list(responses)
+    def __init__(self, response):
+        self.response = response
         self.requests = []
 
     def run_report(self, *, request):
         self.requests.append(request)
-        response = self.responses.pop(0)
+        if len(self.requests) > 1:
+            raise AssertionError("a second GA4 request is forbidden")
+        response = self.response
         if isinstance(response, Exception):
             raise response
         return response
 
 
-def response(dimensions, rows=(), metrics=GA4_METRICS):
+def response(
+    dimensions=GA4_LANDING_PAGE_DIMENSIONS,
+    rows=(),
+    totals=(),
+    metrics=GA4_METRICS,
+):
     return Response(
         dimension_headers=tuple(Header(name) for name in dimensions),
         metric_headers=tuple(Header(name) for name in metrics),
         rows=tuple(rows),
+        totals=tuple(totals),
     )
 
 
@@ -78,12 +87,14 @@ def row(dimensions, metrics):
     )
 
 
-def fake_client(landing_rows=(), channel_rows=None):
-    if channel_rows is None:
-        channel_rows = (row((ORGANIC_SEARCH_CHANNEL,), ("20", "15", "3")),)
+def fake_client(landing_rows=(), total_metrics=("20", "15", "3"), total_rows=None):
+    if total_rows is None:
+        total_rows = (row(
+            (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE),
+            total_metrics,
+        ),)
     return FakeClient(
-        response(GA4_CHANNEL_DIMENSIONS, channel_rows),
-        response(GA4_LANDING_PAGE_DIMENSIONS, landing_rows),
+        response(rows=landing_rows, totals=total_rows),
     )
 
 
@@ -152,7 +163,7 @@ def test_relative_ga4_date_range_remains_supported_without_becoming_observed_at(
         end_date="yesterday",
         observed_at="2026-09-03",
     )
-    request = source.channel_request()
+    request = source.report_request()
     assert request["date_ranges"] == [{
         "start_date": "28daysAgo",
         "end_date": "yesterday",
@@ -163,11 +174,15 @@ def test_relative_ga4_date_range_remains_supported_without_becoming_observed_at(
     ).read_text()
 
 
-def test_channel_request_uses_only_the_approved_dimension_metrics_and_filter():
-    request = adapter(fake_client()).channel_request()
+def test_report_request_is_exact_single_report_contract():
+    request = adapter(fake_client()).report_request()
     assert request["property"] == "properties/552715460"
+    assert request["date_ranges"] == [{
+        "start_date": "2026-08-01",
+        "end_date": "2026-08-31",
+    }]
     assert tuple(item["name"] for item in request["dimensions"]) == (
-        "sessionDefaultChannelGroup",
+        "landingPage", "sessionDefaultChannelGroup",
     )
     assert tuple(item["name"] for item in request["metrics"]) == (
         "sessions", "engagedSessions", "keyEvents",
@@ -182,13 +197,7 @@ def test_channel_request_uses_only_the_approved_dimension_metrics_and_filter():
             },
         }
     }
-
-
-def test_landing_page_request_uses_only_landing_page_and_never_query_dimensions():
-    request = adapter(fake_client()).landing_page_request()
-    assert tuple(item["name"] for item in request["dimensions"]) == (
-        "landingPage", "sessionDefaultChannelGroup",
-    )
+    assert request["metric_aggregations"] == ["TOTAL"]
     serialized = json.dumps(request)
     for prohibited in (
         "pagePath", "landingPagePlusQueryString", "pageLocation",
@@ -198,6 +207,13 @@ def test_landing_page_request_uses_only_landing_page_and_never_query_dimensions(
         assert prohibited not in serialized
 
 
+def test_obsolete_two_report_paths_are_removed():
+    source = (ROOT / "scripts/v3/sources/analytics.py").read_text()
+    assert "channel_request" not in source
+    assert "_parse_channel_response" not in source
+    assert GA4_TOTAL_DIMENSION_VALUE == "RESERVED_TOTAL"
+
+
 def test_fake_client_only_and_no_socket_access(monkeypatch):
     def refuse_network(*_args, **_kwargs):
         raise AssertionError("network access is forbidden")
@@ -205,8 +221,15 @@ def test_fake_client_only_and_no_socket_access(monkeypatch):
     monkeypatch.setattr(socket, "create_connection", refuse_network)
     client = fake_client((row(("/", ORGANIC_SEARCH_CHANNEL), ("10", "7", "2")),))
     signals = adapter(client).collect()
-    assert len(client.requests) == 2
+    assert len(client.requests) == 1
     assert signals[0].organic_sessions == 10
+
+
+def test_zero_traffic_uses_one_same_response_zero_total():
+    client = fake_client(total_metrics=("0", "0", "0"))
+
+    assert adapter(client).collect() == ()
+    assert len(client.requests) == 1
 
 
 def test_ga4_metrics_map_to_existing_traffic_signal_and_evidence():
@@ -242,7 +265,7 @@ def test_ga4_metrics_map_to_existing_traffic_signal_and_evidence():
 def test_ga4_small_zero_key_event_sample_is_telemetry_only_and_scores_weak():
     client = fake_client(
         (row(("/", ORGANIC_SEARCH_CHANNEL), ("6", "4", "0")),),
-        channel_rows=(row((ORGANIC_SEARCH_CHANNEL,), ("6", "4", "0")),),
+        total_metrics=("6", "4", "0"),
     )
     signal = adapter(client).collect()[0]
     score = score_opportunity(signal.topic, traffic=signal)
@@ -259,7 +282,7 @@ def test_ga4_small_zero_key_event_sample_is_telemetry_only_and_scores_weak():
 def test_ga4_positive_key_events_are_retained_but_not_commercial_conversions():
     client = fake_client(
         (row(("/", ORGANIC_SEARCH_CHANNEL), ("100", "70", "7")),),
-        channel_rows=(row((ORGANIC_SEARCH_CHANNEL,), ("100", "70", "7")),),
+        total_metrics=("100", "70", "7"),
     )
     signal = adapter(client).collect()[0]
 
@@ -290,14 +313,30 @@ def test_known_landing_pages_map_to_their_explicit_topics():
         (("12", "9", "2"), ("12", "9", "2")),
     ],
 )
-def test_channel_totals_bound_commercial_landing_totals(
+def test_same_response_totals_bound_commercial_landing_totals(
     channel_metrics, landing_metrics
 ):
     client = fake_client(
         (row(("/", ORGANIC_SEARCH_CHANNEL), landing_metrics),),
-        channel_rows=(row((ORGANIC_SEARCH_CHANNEL,), channel_metrics),),
+        total_metrics=channel_metrics,
     )
     assert adapter(client).collect()[0].organic_sessions == float(landing_metrics[0])
+
+
+def test_same_response_total_allows_unrepresented_residual_traffic():
+    client = fake_client(
+        (row(("/", ORGANIC_SEARCH_CHANNEL), ("4", "3", "1")),),
+        total_metrics=("100", "80", "10"),
+    )
+    signal = adapter(client).collect()[0]
+
+    assert signal.organic_sessions == 4
+    assert signal.evidence[0].fact["organic_channel_totals"] == {
+        "sessions": 100.0,
+        "engaged_sessions": 80.0,
+        "key_events": 10.0,
+    }
+    assert len(client.requests) == 1
 
 
 @pytest.mark.parametrize(
@@ -313,9 +352,54 @@ def test_commercial_landing_metric_above_channel_total_fails_closed(
 ):
     client = fake_client(
         (row(("/", ORGANIC_SEARCH_CHANNEL), landing_metrics),),
-        channel_rows=(row((ORGANIC_SEARCH_CHANNEL,), channel_metrics),),
+        total_metrics=channel_metrics,
     )
     with pytest.raises(GA4DataSourceError, match="exceed Organic Search"):
+        adapter(client).collect()
+
+
+def test_missing_or_multiple_total_rows_fail_closed():
+    missing = fake_client(total_rows=())
+    with pytest.raises(GA4DataSourceError, match="exactly one total row"):
+        adapter(missing).collect()
+
+    total = row(
+        (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE),
+        ("1", "1", "0"),
+    )
+    multiple = fake_client(total_rows=(total, total))
+    with pytest.raises(GA4DataSourceError, match="exactly one total row"):
+        adapter(multiple).collect()
+
+
+@pytest.mark.parametrize(
+    "dimensions",
+    [
+        (GA4_TOTAL_DIMENSION_VALUE,),
+        (GA4_TOTAL_DIMENSION_VALUE, ORGANIC_SEARCH_CHANNEL),
+        ("TOTAL", "TOTAL"),
+    ],
+)
+def test_malformed_total_dimensions_fail_closed(dimensions):
+    client = fake_client(total_rows=(row(dimensions, ("1", "1", "0")),))
+    with pytest.raises(GA4DataSourceError, match="dimensions"):
+        adapter(client).collect()
+
+
+@pytest.mark.parametrize(
+    "metrics",
+    [
+        ("1", "1"),
+        ("1", "1", None),
+        ("1", "1", "NaN"),
+    ],
+)
+def test_malformed_total_metrics_fail_closed(metrics):
+    total = row(
+        (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE), metrics
+    )
+    client = fake_client(total_rows=(total,))
+    with pytest.raises(GA4DataSourceError, match="metric"):
         adapter(client).collect()
 
 
@@ -352,6 +436,18 @@ def test_unknown_and_legal_landing_pages_are_explicitly_excluded():
     assert adapter(fake_client(rows)).collect() == ()
 
 
+def test_raw_unknown_landing_page_never_leaks_into_mapped_evidence():
+    unknown_path = "/unknown-sensitive-looking-value"
+    rows = (
+        row((unknown_path, ORGANIC_SEARCH_CHANNEL), ("5", "4", "1")),
+        row(("/", ORGANIC_SEARCH_CHANNEL), ("5", "4", "1")),
+    )
+    signal = adapter(fake_client(rows)).collect()[0]
+
+    assert signal.evidence[0].fact["landing_pages"] == ("/",)
+    assert unknown_path not in json.dumps(signal.evidence[0].fact)
+
+
 def test_not_set_landing_page_is_explicitly_excluded():
     rows = (row(("(not set)", ORGANIC_SEARCH_CHANNEL), ("100", "90", "20")),)
     assert adapter(fake_client(rows)).collect() == ()
@@ -383,7 +479,6 @@ def test_unexpected_channel_or_dimensions_fail_closed():
 
     wrong_headers = FakeClient(
         response(("pageLocation",)),
-        response(GA4_LANDING_PAGE_DIMENSIONS),
     )
     with pytest.raises(GA4DataSourceError, match="dimensions"):
         adapter(wrong_headers).collect()
@@ -402,8 +497,7 @@ def test_missing_or_changed_metric_fails_closed():
         adapter(fake_client(missing_value)).collect()
 
     wrong_metric_headers = FakeClient(
-        response(GA4_CHANNEL_DIMENSIONS, metrics=("sessions", "engagedSessions", "conversions")),
-        response(GA4_LANDING_PAGE_DIMENSIONS),
+        response(metrics=("sessions", "engagedSessions", "conversions")),
     )
     with pytest.raises(GA4DataSourceError, match="metrics"):
         adapter(wrong_metric_headers).collect()
@@ -414,6 +508,7 @@ def test_api_failure_is_sanitized_and_fails_closed():
     with pytest.raises(GA4DataSourceError, match="GA4 Data API request failed") as failure:
         adapter(client).collect()
     assert "remote details" not in str(failure.value)
+    assert len(client.requests) == 1
 
 
 def test_future_live_factory_fails_closed_when_adc_is_unavailable(monkeypatch):

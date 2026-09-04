@@ -27,9 +27,9 @@ from scripts.v3.ga4_organic_coverage_diagnostic import (
 from scripts.v3.models import TrafficSignal
 from scripts.v3.sources.analytics import (
     DEFAULT_GA4_LANDING_PAGE_TOPICS,
-    GA4_CHANNEL_DIMENSIONS,
     GA4_LANDING_PAGE_DIMENSIONS,
     GA4_METRICS,
+    GA4_TOTAL_DIMENSION_VALUE,
     ORGANIC_SEARCH_CHANNEL,
     GoogleAnalyticsDataSource,
 )
@@ -68,6 +68,7 @@ class Response:
     dimension_headers: tuple
     metric_headers: tuple
     rows: tuple
+    totals: tuple
 
 
 class FakeClient:
@@ -88,11 +89,17 @@ class CollectSpy(GoogleAnalyticsDataSource):
         return super().collect()
 
 
-def response(dimensions, rows=(), metrics=GA4_METRICS):
+def response(
+    dimensions=GA4_LANDING_PAGE_DIMENSIONS,
+    rows=(),
+    totals=(),
+    metrics=GA4_METRICS,
+):
     return Response(
         dimension_headers=tuple(Header(name) for name in dimensions),
         metric_headers=tuple(Header(name) for name in metrics),
         rows=tuple(rows),
+        totals=tuple(totals),
     )
 
 
@@ -111,12 +118,13 @@ def client_for(channel_metrics=(20, 15, 4), landing_rows=None):
             row(("/privacy-safe-unmapped", ORGANIC_SEARCH_CHANNEL), (5, 4, 1)),
             row(("(not set)", ORGANIC_SEARCH_CHANNEL), (1, 1, 0)),
         )
-    channel_rows = () if channel_metrics is None else (
-        row((ORGANIC_SEARCH_CHANNEL,), channel_metrics),
-    )
+    total_metrics = (0, 0, 0) if channel_metrics is None else channel_metrics
+    total_rows = (row(
+        (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE),
+        total_metrics,
+    ),)
     return FakeClient(
-        response(GA4_CHANNEL_DIMENSIONS, channel_rows),
-        response(GA4_LANDING_PAGE_DIMENSIONS, landing_rows),
+        response(rows=landing_rows, totals=total_rows),
     )
 
 
@@ -142,12 +150,12 @@ def forbid_network(monkeypatch):
     )
 
 
-def test_collect_runs_once_and_recording_client_forwards_exactly_two_reports():
+def test_collect_runs_once_and_recording_client_forwards_exactly_one_report():
     client = client_for()
     result, _ = execute(client, data_source_class=CollectSpy)
     assert CollectSpy.collect_calls == 1
-    assert result.report_calls == EXPECTED_REPORT_CALLS == 2
-    assert len(client.requests) == 2
+    assert result.report_calls == EXPECTED_REPORT_CALLS == 1
+    assert len(client.requests) == 1
 
 
 def test_requests_match_property_dates_dimensions_metrics_and_filter_exactly():
@@ -156,30 +164,26 @@ def test_requests_match_property_dates_dimensions_metrics_and_filter_exactly():
     assert PROPERTY_ID == "552715460"
     assert START_DATE == END_DATE == "2026-09-03"
     assert OBSERVED_AT == "2026-09-04"
-    assert all(
-        request["property"] == "properties/552715460"
-        and request["date_ranges"] == [{
+    request = client.requests[0]
+    assert request["property"] == "properties/552715460"
+    assert request["date_ranges"] == [{
             "start_date": "2026-09-03", "end_date": "2026-09-03",
-        }]
-        and tuple(item["name"] for item in request["metrics"]) == GA4_METRICS
-        and request["dimension_filter"] == {
-            "filter": {
-                "field_name": "sessionDefaultChannelGroup",
-                "string_filter": {
-                    "match_type": "EXACT",
-                    "value": "Organic Search",
-                    "case_sensitive": True,
-                },
+    }]
+    assert tuple(item["name"] for item in request["metrics"]) == GA4_METRICS
+    assert request["dimension_filter"] == {
+        "filter": {
+            "field_name": "sessionDefaultChannelGroup",
+            "string_filter": {
+                "match_type": "EXACT",
+                "value": "Organic Search",
+                "case_sensitive": True,
             }
         }
-        for request in client.requests
-    )
+    }
     assert tuple(item["name"] for item in client.requests[0]["dimensions"]) == (
-        "sessionDefaultChannelGroup",
-    )
-    assert tuple(item["name"] for item in client.requests[1]["dimensions"]) == (
         "landingPage", "sessionDefaultChannelGroup",
     )
+    assert request["metric_aggregations"] == ["TOTAL"]
 
 
 def test_recording_client_refuses_unexpected_request_before_network_forwarding():
@@ -260,16 +264,21 @@ def test_query_string_and_full_url_fail_closed_without_output(unsafe_path):
 
 
 def test_malformed_dimension_headers_or_rows_fail_closed_without_output():
+    valid_total = row(
+        (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE),
+        (1, 1, 0),
+    )
     clients = (
         FakeClient(
             response(("wrongDimension",)),
-            response(GA4_LANDING_PAGE_DIMENSIONS),
         ),
         FakeClient(
-            response(GA4_CHANNEL_DIMENSIONS, (
-                row((ORGANIC_SEARCH_CHANNEL, "extra"), (1, 1, 0)),
-            )),
-            response(GA4_LANDING_PAGE_DIMENSIONS),
+            response(
+                rows=(
+                    row((ORGANIC_SEARCH_CHANNEL, "extra"), (1, 1, 0)),
+                ),
+                totals=(valid_total,),
+            ),
         ),
     )
     for client in clients:
@@ -285,11 +294,11 @@ def test_malformed_dimension_headers_or_rows_fail_closed_without_output():
     ("-1", "2", "0"),
 ))
 def test_malformed_or_negative_metrics_fail_closed_without_output(bad_metrics):
+    bad_total = row(
+        (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE), bad_metrics
+    )
     client = FakeClient(
-        response(GA4_CHANNEL_DIMENSIONS, (
-            row((ORGANIC_SEARCH_CHANNEL,), bad_metrics),
-        )),
-        response(GA4_LANDING_PAGE_DIMENSIONS),
+        response(totals=(bad_total,)),
     )
     output = []
     with pytest.raises(GA4OrganicCoverageDiagnosticError):

@@ -17,7 +17,7 @@ AUTH_MODE = "WIF"
 START_DATE = "2026-09-03"
 END_DATE = "2026-09-03"
 OBSERVED_AT = "2026-09-04"
-EXPECTED_REPORT_CALLS = 2
+EXPECTED_REPORT_CALLS = 1
 PASS_VERDICT = "GA4_ADAPTER_READONLY_TEST_PASS"
 FAIL_VERDICT = "GA4_ADAPTER_READONLY_TEST_FAILED"
 
@@ -90,11 +90,15 @@ def _safe_output(signals: Iterable[TrafficSignal]) -> Tuple[str, ...]:
                 index, _format_metric(signal.engaged_sessions)
             ),
             "SIGNAL_{}_CONVERSIONS={}".format(
-                index, _format_metric(signal.conversions)
+                index, _format_optional_metric(signal.conversions)
             ),
         ))
     lines.append("FINAL_VERDICT={}".format(PASS_VERDICT))
     return tuple(lines)
+
+
+def _format_optional_metric(value: Any) -> str:
+    return "UNKNOWN" if value is None else _format_metric(value)
 
 
 def _format_metric(value: Any) -> str:

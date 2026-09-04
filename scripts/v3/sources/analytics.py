@@ -12,9 +12,14 @@ from .base import FixtureSource, fixture_evidence
 GA4_PROPERTY_ID = "552715460"
 GA4_RESOURCE = "properties/552715460"
 ORGANIC_SEARCH_CHANNEL = "Organic Search"
+# Shared by the standalone diagnostics; the adapter itself uses one landing
+# page report and does not execute a separate channel report.
 GA4_CHANNEL_DIMENSIONS = ("sessionDefaultChannelGroup",)
 GA4_LANDING_PAGE_DIMENSIONS = ("landingPage", "sessionDefaultChannelGroup")
 GA4_METRICS = ("sessions", "engagedSessions", "keyEvents")
+# google-analytics-data 0.22.0 documents MetricAggregation.TOTAL rows with
+# RESERVED_TOTAL in every requested dimension value.
+GA4_TOTAL_DIMENSION_VALUE = "RESERVED_TOTAL"
 DEFAULT_GA4_LANDING_PAGE_TOPICS = {
     "/": "general_delivery",
     "/business-plus": "business_delivery",
@@ -114,30 +119,16 @@ class GoogleAnalyticsDataSource:
         self.observed_at = observed_at
         self.landing_page_topics = mapping
 
-    def channel_request(self) -> Mapping[str, Any]:
-        return self._request(GA4_CHANNEL_DIMENSIONS)
-
-    def landing_page_request(self) -> Mapping[str, Any]:
-        return self._request(GA4_LANDING_PAGE_DIMENSIONS)
-
-    def collect(self) -> Tuple[TrafficSignal, ...]:
-        """Fetch and normalize aggregate data, failing closed on uncertainty."""
-
-        channel_response = self._run_report(self.channel_request())
-        channel_totals = self._parse_channel_response(channel_response)
-        landing_page_response = self._run_report(self.landing_page_request())
-        rows = self._parse_landing_page_response(landing_page_response)
-        self._validate_commercial_landing_totals(rows, channel_totals)
-        return self._aggregate_rows(rows, channel_totals)
-
-    def _request(self, dimensions: Tuple[str, ...]) -> Mapping[str, Any]:
+    def report_request(self) -> Mapping[str, Any]:
         return {
             "property": self.property_resource,
             "date_ranges": [{
                 "start_date": self.start_date,
                 "end_date": self.end_date,
             }],
-            "dimensions": [{"name": name} for name in dimensions],
+            "dimensions": [
+                {"name": name} for name in GA4_LANDING_PAGE_DIMENSIONS
+            ],
             "metrics": [{"name": name} for name in GA4_METRICS],
             "dimension_filter": {
                 "filter": {
@@ -149,7 +140,17 @@ class GoogleAnalyticsDataSource:
                     },
                 }
             },
+            "metric_aggregations": ["TOTAL"],
         }
+
+    def collect(self) -> Tuple[TrafficSignal, ...]:
+        """Fetch and normalize aggregate data, failing closed on uncertainty."""
+
+        response = self._run_report(self.report_request())
+        channel_totals = self._parse_total_response(response)
+        rows = self._parse_landing_page_response(response)
+        self._validate_commercial_landing_totals(rows, channel_totals)
+        return self._aggregate_rows(rows, channel_totals)
 
     def _run_report(self, request: Mapping[str, Any]) -> Any:
         try:
@@ -157,19 +158,20 @@ class GoogleAnalyticsDataSource:
         except Exception:
             raise GA4DataSourceError("GA4 Data API request failed") from None
 
-    def _parse_channel_response(self, response: Any) -> Tuple[Decimal, Decimal, Decimal]:
-        self._validate_headers(response, GA4_CHANNEL_DIMENSIONS)
-        rows = tuple(getattr(response, "rows", ()) or ())
-        if not rows:
-            return (Decimal(0), Decimal(0), Decimal(0))
-        totals = [Decimal(0), Decimal(0), Decimal(0)]
-        for row in rows:
-            dimensions, metrics = self._row_values(row, 1)
-            if dimensions[0] != ORGANIC_SEARCH_CHANNEL:
-                raise GA4DataSourceError("GA4 response contains an unexpected channel")
-            for index, value in enumerate(metrics):
-                totals[index] += value
-        return tuple(totals)
+    def _parse_total_response(
+        self, response: Any
+    ) -> Tuple[Decimal, Decimal, Decimal]:
+        self._validate_headers(response, GA4_LANDING_PAGE_DIMENSIONS)
+        totals = tuple(getattr(response, "totals", ()) or ())
+        if len(totals) != 1:
+            raise GA4DataSourceError("GA4 response must contain exactly one total row")
+        dimensions, metrics = self._row_values(totals[0], 2)
+        if dimensions != (
+            GA4_TOTAL_DIMENSION_VALUE,
+            GA4_TOTAL_DIMENSION_VALUE,
+        ):
+            raise GA4DataSourceError("GA4 total row dimensions are unexpected")
+        return metrics
 
     def _parse_landing_page_response(
         self, response: Any

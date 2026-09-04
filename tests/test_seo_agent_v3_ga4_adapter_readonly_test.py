@@ -21,9 +21,9 @@ from scripts.v3.ga4_adapter_readonly_test import (
 from scripts.v3.models import Confidence, Evidence, TrafficSignal
 from scripts.v3.sources.analytics import (
     DEFAULT_GA4_LANDING_PAGE_TOPICS,
-    GA4_CHANNEL_DIMENSIONS,
     GA4_LANDING_PAGE_DIMENSIONS,
     GA4_METRICS,
+    GA4_TOTAL_DIMENSION_VALUE,
     ORGANIC_SEARCH_CHANNEL,
     GoogleAnalyticsDataSource,
 )
@@ -60,6 +60,7 @@ class Response:
     dimension_headers: tuple
     metric_headers: tuple
     rows: tuple
+    totals: tuple
 
 
 class FakeClient:
@@ -86,11 +87,12 @@ class FakeSource:
         return self.signals
 
 
-def response(dimensions, rows=()):
+def response(dimensions, rows=(), totals=()):
     return Response(
         dimension_headers=tuple(Header(name) for name in dimensions),
         metric_headers=tuple(Header(name) for name in GA4_METRICS),
         rows=tuple(rows),
+        totals=tuple(totals),
     )
 
 
@@ -154,15 +156,16 @@ def test_runner_uses_existing_adapter_contract_and_collects_exactly_once():
     }
 
 
-def test_existing_adapter_performs_exactly_two_fixed_read_only_reports():
+def test_existing_adapter_performs_exactly_one_fixed_read_only_report():
+    total = row(
+        (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE),
+        ("4", "3", "1"),
+    )
     client = FakeClient(
-        response(
-            GA4_CHANNEL_DIMENSIONS,
-            (row((ORGANIC_SEARCH_CHANNEL,), ("4", "3", "1")),),
-        ),
         response(
             GA4_LANDING_PAGE_DIMENSIONS,
             (row(("/", ORGANIC_SEARCH_CHANNEL), ("4", "3", "1")),),
+            (total,),
         ),
     )
     source = GoogleAnalyticsDataSource(
@@ -174,17 +177,15 @@ def test_existing_adapter_performs_exactly_two_fixed_read_only_reports():
         landing_page_topics=dict(DEFAULT_GA4_LANDING_PAGE_TOPICS),
     )
     assert len(source.collect()) == 1
-    assert len(client.requests) == EXPECTED_REPORT_CALLS == 2
+    assert len(client.requests) == EXPECTED_REPORT_CALLS == 1
     assert all(request["property"] == "properties/552715460" for request in client.requests)
     assert all(request["date_ranges"] == [{
         "start_date": "2026-09-03", "end_date": "2026-09-03",
     }] for request in client.requests)
     assert tuple(item["name"] for item in client.requests[0]["dimensions"]) == (
-        "sessionDefaultChannelGroup",
-    )
-    assert tuple(item["name"] for item in client.requests[1]["dimensions"]) == (
         "landingPage", "sessionDefaultChannelGroup",
     )
+    assert client.requests[0]["metric_aggregations"] == ["TOTAL"]
     for request in client.requests:
         assert tuple(item["name"] for item in request["metrics"]) == (
             "sessions", "engagedSessions", "keyEvents",
@@ -207,7 +208,7 @@ def test_zero_signals_is_successful_and_uses_allowlisted_output_only():
         "START_DATE=2026-09-03",
         "END_DATE=2026-09-03",
         "OBSERVED_AT=2026-09-04",
-        "EXPECTED_REPORT_CALLS=2",
+        "EXPECTED_REPORT_CALLS=1",
         "SIGNAL_COUNT=0",
         "TOPICS=",
         "FINAL_VERDICT=GA4_ADAPTER_READONLY_TEST_PASS",
@@ -239,6 +240,22 @@ def test_multiple_signals_are_reported_in_deterministic_aggregate_order():
         "SIGNAL_2_ENGAGED_SESSIONS=2",
         "SIGNAL_2_CONVERSIONS=1",
     ]
+    assert output[-1] == "FINAL_VERDICT={}".format(PASS_VERDICT)
+
+
+def test_unverified_ga4_conversion_semantics_are_reported_as_unknown():
+    FakeSource.signals = (
+        traffic_signal("business_delivery", 7, 5, None),
+    )
+    output = []
+
+    run_adapter_test(
+        client_factory=lambda: object(),
+        data_source_class=FakeSource,
+        emit=output.append,
+    )
+
+    assert "SIGNAL_1_CONVERSIONS=UNKNOWN" in output
     assert output[-1] == "FINAL_VERDICT={}".format(PASS_VERDICT)
 
 
