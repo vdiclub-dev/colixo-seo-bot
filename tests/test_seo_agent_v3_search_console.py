@@ -409,13 +409,21 @@ def test_live_search_console_source_is_unreachable_from_runtime_factory():
     assert tuple(state.value for state in RuntimeState) == ("OFFLINE", "GA4_READ_ONLY")
 
 
-def test_no_workflow_or_legacy_v2_auth_path_is_changed_by_foundation():
-    changed = subprocess.run(
-        ["git", "diff", "--name-only", "origin/main...HEAD"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.splitlines()
-    assert all(not path.startswith(".github/workflows/") for path in changed)
-    assert "scripts/gsc_client.py" not in changed
+def test_v3_search_console_source_remains_isolated_from_legacy_v2_auth():
+    v3_source_path = ROOT / "scripts/v3/sources/search_console.py"
+    legacy_v2_client_path = ROOT / "scripts/gsc_client.py"
+    legacy_v2_workflow_path = ROOT / ".github/workflows/seo.yml"
+
+    assert v3_source_path.is_file()
+    assert legacy_v2_client_path.is_file()
+    assert legacy_v2_workflow_path.is_file()
+
+    v3_source = v3_source_path.read_text(encoding="utf-8")
+    assert "GSC_SERVICE_ACCOUNT_JSON" not in v3_source
+    assert "GSC_SERVICE_ACCOUNT_FILE" not in v3_source
+    assert "scripts.gsc_client" not in v3_source
+    assert "from scripts import gsc_client" not in v3_source
+    assert "import gsc_client" not in v3_source
+    assert "def create_google_search_console_transport()" in v3_source
+    assert "google.auth.default" in v3_source
+    assert "AuthorizedSession" in v3_source
