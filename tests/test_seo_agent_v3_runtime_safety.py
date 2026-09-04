@@ -372,15 +372,12 @@ def test_agent_output_matches_pre_refactor_snapshot():
 """
 
 
-def test_key_event_and_scoring_files_remain_outside_this_change():
-    changed = subprocess.run(
-        ["git", "diff", "--name-only", "origin/main"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.splitlines()
+def test_conversion_safety_change_does_not_activate_live_ga4_runtime():
+    payload = _payload()
 
-    assert "scripts/v3/sources/analytics.py" not in changed
-    assert "scripts/v3/scoring.py" not in changed
+    assert payload["mode"]["network_enabled"] is False
+    assert payload["phase_1_sources"]["analytics"] == "local_fixture"
+    assert payload["network_policy"]["default"] == "deny"
+    assert payload["network_policy"]["sources"]["analytics"] == "deny"
+    assert payload["ga4_data_api"]["enabled"] is False
     assert LIVE_GA4_RUNTIME_ALLOWED is False

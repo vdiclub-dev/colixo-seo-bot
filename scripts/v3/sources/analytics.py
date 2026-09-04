@@ -289,7 +289,9 @@ class GoogleAnalyticsDataSource:
                 topic=topic,
                 organic_sessions=float(aggregate["sessions"]),
                 engaged_sessions=float(aggregate["engaged_sessions"]),
-                conversions=float(aggregate["key_events"]),
+                # GA4 key events remain observational telemetry until Colixo
+                # explicitly validates their commercial conversion semantics.
+                conversions=None,
                 evidence=(Evidence(
                     source="google_analytics_4",
                     observed_at=self.observed_at,

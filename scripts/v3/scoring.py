@@ -34,6 +34,17 @@ CONFIDENCE_POINTS = {
     Confidence.HIGH: 90,
 }
 
+MIN_ORGANIC_SESSIONS_FOR_ZERO_CONVERSION_EVIDENCE = 50
+SUBSTANTIVE_DIMENSIONS = (
+    "search_demand",
+    "rank_opportunity",
+    "commercial_fit",
+    "conversion_signal",
+    "competitive_gap",
+    "reputation_gap",
+)
+MIN_SUBSTANTIVE_DIMENSIONS_FOR_MODERATE = 2
+
 SignalT = TypeVar("SignalT")
 SignalInput = Optional[Union[SignalT, Sequence[SignalT]]]
 
@@ -102,8 +113,20 @@ def _rank_level(signals: Sequence[RankSignal], searches: Sequence[SearchSignal])
 def _conversion_level(
     traffic: Sequence[TrafficSignal], business: Sequence[BusinessSignal]
 ) -> DimensionLevel:
+    traffic_conversions = []
+    for signal in traffic:
+        conversions = signal.conversions
+        if conversions is None:
+            continue
+        if conversions == 0 and (
+            signal.organic_sessions is None
+            or signal.organic_sessions
+            < MIN_ORGANIC_SESSIONS_FOR_ZERO_CONVERSION_EVIDENCE
+        ):
+            continue
+        traffic_conversions.append(conversions)
     total = _sum_known(
-        [item.conversions for item in traffic]
+        traffic_conversions
         + [item.orders_completed for item in business]
     )
     return _level_from_volume(total, 5, 20)
@@ -255,11 +278,15 @@ def score_opportunity(
         for name, level in dimensions.items()
         if level is not DimensionLevel.UNKNOWN
     }
+    substantive_known_count = sum(
+        dimensions[name] is not DimensionLevel.UNKNOWN
+        for name in SUBSTANTIVE_DIMENSIONS
+    )
     denominator = fsum(effective_weights[name] for name in known)
     raw_score = (
         fsum(LEVEL_POINTS[level] * effective_weights[name] for name, level in known.items())
         / denominator
-        if denominator
+        if denominator and substantive_known_count
         else 0
     )
     final_score = max(0, min(100, int(round(raw_score))))
@@ -297,6 +324,10 @@ def recommendation_for(
 
     effective_policy = policy or load_v3_config().recommendation_policy
     known_count = 7 - len(score.unknown_dimensions)
+    substantive_known_count = sum(
+        score.dimensions()[name] is not DimensionLevel.UNKNOWN
+        for name in SUBSTANTIVE_DIMENSIONS
+    )
     confidence_sufficient = (
         CONFIDENCE_ORDER[score.confidence.value]
         >= CONFIDENCE_ORDER[effective_policy.strong_min_confidence]
@@ -308,7 +339,11 @@ def recommendation_for(
     ):
         strength = "strong"
         action = "Prioritize a reviewed market opportunity experiment."
-    elif score.final_score >= 50 and score.confidence is not Confidence.VERY_LOW:
+    elif (
+        score.final_score >= 50
+        and score.confidence is not Confidence.VERY_LOW
+        and substantive_known_count >= MIN_SUBSTANTIVE_DIMENSIONS_FOR_MODERATE
+    ):
         strength = "moderate"
         action = "Validate the opportunity with additional evidence before action."
     else:
