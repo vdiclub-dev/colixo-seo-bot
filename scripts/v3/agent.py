@@ -8,14 +8,7 @@ from .config import V3Config, load_v3_config
 from .models import OpportunityScore, Recommendation
 from .report import render_markdown
 from .scoring import recommendation_for, score_opportunity
-from .sources import (
-    AnalyticsFixtureSource,
-    BusinessMetricsFixtureSource,
-    CompetitorFixtureSource,
-    RankTrackerFixtureSource,
-    ReviewsFixtureSource,
-    SearchConsoleFixtureSource,
-)
+from .source_factory import build_source_adapters
 
 
 @dataclass(frozen=True)
@@ -31,14 +24,7 @@ class MarketIntelligenceAgent:
 
     def __init__(self, config_path: Optional[Path] = None) -> None:
         self.config: V3Config = load_v3_config(config_path)
-        self.adapters = {
-            "search_console": SearchConsoleFixtureSource(),
-            "analytics": AnalyticsFixtureSource(),
-            "rank_tracker": RankTrackerFixtureSource(),
-            "competitors": CompetitorFixtureSource(),
-            "reviews": ReviewsFixtureSource(),
-            "business_metrics": BusinessMetricsFixtureSource(),
-        }
+        self.adapters = build_source_adapters(self.config)
 
     def run(self, fixtures: Mapping[str, Any]) -> AgentResult:
         collected = {

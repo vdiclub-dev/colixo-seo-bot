@@ -429,7 +429,12 @@ def test_dependency_and_auth_contract_are_keyless_and_workflow_free():
     assert all(value not in repository_text for value in prohibited)
 
 
-def test_current_agent_does_not_construct_or_activate_ga4_adapter():
+def test_current_agent_uses_offline_factory_without_activating_ga4_adapter():
     agent_source = (ROOT / "scripts/v3/agent.py").read_text()
+    factory_source = (ROOT / "scripts/v3/source_factory.py").read_text()
     assert "GoogleAnalyticsDataSource" not in agent_source
-    assert '"analytics": AnalyticsFixtureSource()' in agent_source
+    assert "build_source_adapters(self.config)" in agent_source
+    assert "AnalyticsFixtureSource" in factory_source
+    assert "GoogleAnalyticsDataSource" not in factory_source
+    assert "create_google_analytics_data_client" not in factory_source
+    assert "LIVE_GA4_RUNTIME_ALLOWED = False" in factory_source
