@@ -2,6 +2,7 @@
 
 import re
 import unicodedata
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Mapping, Optional, Tuple
@@ -24,6 +25,34 @@ GSC_REQUEST_TIMEOUT_SECONDS = 30
 
 class GSCDataSourceError(ValueError):
     """Raised when Search Console input or output cannot be trusted."""
+
+
+@dataclass(frozen=True)
+class GSCCollectionCoverage:
+    """Aggregate valid-row coverage; no excluded query content is retained."""
+
+    raw_row_count: int
+    accepted_signal_count: int
+    unmapped_row_count: int
+    pii_filtered_row_count: int
+    all_rows_clicks: Decimal
+    all_rows_impressions: Decimal
+    accepted_clicks: Decimal
+    accepted_impressions: Decimal
+
+    def __post_init__(self) -> None:
+        if self.raw_row_count != (
+            self.accepted_signal_count
+            + self.unmapped_row_count
+            + self.pii_filtered_row_count
+        ):
+            raise GSCDataSourceError("Search Console coverage invariant is invalid")
+
+
+@dataclass(frozen=True)
+class GSCCollectionResult:
+    signals: Tuple[SearchSignal, ...]
+    coverage: GSCCollectionCoverage
 
 
 _EMAIL_QUERY = re.compile(
@@ -172,6 +201,10 @@ class GoogleSearchConsoleDataSource:
         }
 
     def collect(self) -> Tuple[SearchSignal, ...]:
+        return self.collect_with_coverage().signals
+
+    def collect_with_coverage(self) -> GSCCollectionResult:
+        """Collect once using the same strict parser and commercial filters."""
         response = self._request_once()
         payload = self._response_payload(response)
         rows = payload.get("rows", ())
@@ -181,13 +214,23 @@ class GoogleSearchConsoleDataSource:
             raise GSCDataSourceError("Search Console response schema is invalid")
 
         signals = []
+        raw_row_count = unmapped_row_count = pii_filtered_row_count = 0
+        all_rows_clicks = all_rows_impressions = Decimal(0)
+        accepted_clicks = accepted_impressions = Decimal(0)
         for row in rows:
             query, clicks, impressions, ctr, position = self._parse_row(row)
+            raw_row_count += 1
+            all_rows_clicks += clicks
+            all_rows_impressions += impressions
             if _contains_obvious_pii(query):
+                pii_filtered_row_count += 1
                 continue
             topic = classify_search_query_topic(query)
             if topic is None:
+                unmapped_row_count += 1
                 continue
+            accepted_clicks += clicks
+            accepted_impressions += impressions
             fact = {
                 "query": query,
                 "clicks": float(clicks),
@@ -216,7 +259,19 @@ class GoogleSearchConsoleDataSource:
                     confidence=Confidence.HIGH,
                 ),),
             ))
-        return tuple(sorted(signals, key=lambda signal: (signal.topic, signal.query)))
+        return GSCCollectionResult(
+            signals=tuple(sorted(signals, key=lambda signal: (signal.topic, signal.query))),
+            coverage=GSCCollectionCoverage(
+                raw_row_count=raw_row_count,
+                accepted_signal_count=len(signals),
+                unmapped_row_count=unmapped_row_count,
+                pii_filtered_row_count=pii_filtered_row_count,
+                all_rows_clicks=all_rows_clicks,
+                all_rows_impressions=all_rows_impressions,
+                accepted_clicks=accepted_clicks,
+                accepted_impressions=accepted_impressions,
+            ),
+        )
 
     def _request_once(self) -> Any:
         try:
