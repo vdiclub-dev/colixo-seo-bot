@@ -1,7 +1,8 @@
-"""Fail-closed configuration loader for the offline V3 runtime."""
+"""Fail-closed configuration loader for the two authorized V3 runtimes."""
 
 import json
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping, Optional, Tuple
@@ -43,6 +44,13 @@ _TOP_LEVEL_FIELDS = {
 
 class V3ConfigError(ValueError):
     """Raised when runtime configuration is incomplete, ambiguous, or unsafe."""
+
+
+class RuntimeState(str, Enum):
+    """Complete runtime states accepted by the V3 authorization boundary."""
+
+    OFFLINE = "OFFLINE"
+    GA4_READ_ONLY = "GA4_READ_ONLY"
 
 
 @dataclass(frozen=True)
@@ -123,6 +131,7 @@ class RecommendationPolicy:
 
 @dataclass(frozen=True)
 class V3Config:
+    runtime_state: RuntimeState
     mode: ModeConfig
     phase_1_sources: SourceSelectionConfig
     network_policy: NetworkPolicyConfig
@@ -133,7 +142,7 @@ class V3Config:
 
 
 def load_v3_config(path: Optional[Path] = None) -> V3Config:
-    """Load the sole Phase 2F-B state: offline, fixture-only, and network-denied."""
+    """Load one exact, fully authorized runtime state and reject all mixtures."""
 
     source_path = Path(path) if path is not None else DEFAULT_CONFIG_PATH
     try:
@@ -186,7 +195,14 @@ def load_v3_config(path: Optional[Path] = None) -> V3Config:
         raise V3ConfigError("strong_min_confidence is invalid")
     if not 1 <= min_known <= len(REQUIRED_SCORE_DIMENSIONS):
         raise V3ConfigError("strong_min_known_dimensions is invalid")
+    runtime_state = _derive_runtime_state(
+        mode,
+        source_selection,
+        network_policy,
+        ga4_data_api,
+    )
     config = V3Config(
+        runtime_state=runtime_state,
         mode=mode,
         phase_1_sources=source_selection,
         network_policy=network_policy,
@@ -199,33 +215,85 @@ def load_v3_config(path: Optional[Path] = None) -> V3Config:
         ),
         source_path=source_path,
     )
-    validate_offline_runtime(config)
+    validate_runtime_state(config)
     return config
 
 
-def validate_offline_runtime(config: V3Config) -> None:
-    """Recheck the only authorized runtime state before adapter construction."""
+def validate_runtime_state(config: V3Config) -> RuntimeState:
+    """Recheck the complete allowlisted state before adapter construction."""
 
     if not isinstance(config, V3Config):
         raise V3ConfigError("a validated V3Config is required")
+    runtime_state = _derive_runtime_state(
+        config.mode,
+        config.phase_1_sources,
+        config.network_policy,
+        config.ga4_data_api,
+    )
+    if config.runtime_state is not runtime_state:
+        raise V3ConfigError("V3 runtime state marker does not match its configuration")
+    return runtime_state
+
+
+def validate_offline_runtime(config: V3Config) -> None:
+    """Require the default offline state for offline-only call sites."""
+
+    if validate_runtime_state(config) is not RuntimeState.OFFLINE:
+        raise V3ConfigError("this operation permits the OFFLINE runtime only")
+
+
+def _derive_runtime_state(
+    mode: ModeConfig,
+    source_selection: SourceSelectionConfig,
+    network_policy: NetworkPolicyConfig,
+    ga4_data_api: GA4DataAPIConfig,
+) -> RuntimeState:
+    """Return one exact state; partial, mixed, and unknown states fail closed."""
+
     if (
-        config.mode.read_only is not True
-        or config.mode.proposal_only is not True
-        or config.mode.network_enabled is not False
-        or config.mode.site_publication_enabled is not False
+        mode.read_only is not True
+        or mode.proposal_only is not True
+        or mode.site_publication_enabled is not False
     ):
-        raise V3ConfigError("Phase 2F-B permits the offline mode only")
-    if any(
-        config.phase_1_sources.value_for(name) != "local_fixture"
+        raise V3ConfigError("V3 runtime must remain read-only and proposal-only")
+    if network_policy.default != "deny":
+        raise V3ConfigError("V3 runtime requires a default-deny network policy")
+
+    all_fixtures = all(
+        source_selection.value_for(name) == "local_fixture" for name in SOURCE_NAMES
+    )
+    all_denied = all(
+        network_policy.value_for(name) == "deny" for name in SOURCE_NAMES
+    )
+    if (
+        mode.network_enabled is False
+        and all_fixtures
+        and all_denied
+        and ga4_data_api.enabled is False
+    ):
+        return RuntimeState.OFFLINE
+
+    non_analytics_sources_are_fixtures = all(
+        source_selection.value_for(name) == "local_fixture"
         for name in SOURCE_NAMES
+        if name != "analytics"
+    )
+    non_analytics_network_is_denied = all(
+        network_policy.value_for(name) == "deny"
+        for name in SOURCE_NAMES
+        if name != "analytics"
+    )
+    if (
+        mode.network_enabled is True
+        and source_selection.analytics == "ga4_data_api"
+        and non_analytics_sources_are_fixtures
+        and network_policy.analytics == "allow"
+        and non_analytics_network_is_denied
+        and ga4_data_api.enabled is True
     ):
-        raise V3ConfigError("Phase 2F-B permits local_fixture sources only")
-    if config.network_policy.default != "deny" or any(
-        config.network_policy.value_for(name) != "deny" for name in SOURCE_NAMES
-    ):
-        raise V3ConfigError("Phase 2F-B requires deny for every network policy")
-    if config.ga4_data_api.enabled is not False:
-        raise V3ConfigError("Phase 2F-B requires ga4_data_api.enabled=false")
+        return RuntimeState.GA4_READ_ONLY
+
+    raise V3ConfigError("configuration is not an authorized V3 runtime state")
 
 
 def _load_mode(value: object) -> ModeConfig:
@@ -238,17 +306,17 @@ def _load_mode(value: object) -> ModeConfig:
     if not isinstance(value, dict) or set(value) != expected:
         raise V3ConfigError("mode is incomplete or unexpected")
     if value["read_only"] is not True:
-        raise V3ConfigError("Phase 2F-B requires read_only=true")
+        raise V3ConfigError("V3 runtime requires read_only=true")
     if value["proposal_only"] is not True:
-        raise V3ConfigError("Phase 2F-B requires proposal_only=true")
-    if value["network_enabled"] is not False:
-        raise V3ConfigError("Phase 2F-B requires network_enabled=false")
+        raise V3ConfigError("V3 runtime requires proposal_only=true")
+    if not isinstance(value["network_enabled"], bool):
+        raise V3ConfigError("mode.network_enabled must be boolean")
     if value["site_publication_enabled"] is not False:
-        raise V3ConfigError("Phase 2F-B requires site_publication_enabled=false")
+        raise V3ConfigError("V3 runtime requires site_publication_enabled=false")
     return ModeConfig(
         read_only=True,
         proposal_only=True,
-        network_enabled=False,
+        network_enabled=value["network_enabled"],
         site_publication_enabled=False,
     )
 
@@ -256,8 +324,12 @@ def _load_mode(value: object) -> ModeConfig:
 def _load_source_selection(value: object) -> SourceSelectionConfig:
     if not isinstance(value, dict) or set(value) != _SOURCE_NAME_SET:
         raise V3ConfigError("phase_1_sources must define exactly the six V3 sources")
-    if any(value[name] != "local_fixture" for name in SOURCE_NAMES):
-        raise V3ConfigError("Phase 2F-B permits local_fixture sources only")
+    if value["analytics"] not in {"local_fixture", "ga4_data_api"}:
+        raise V3ConfigError("analytics source adapter is invalid")
+    if any(
+        value[name] != "local_fixture" for name in SOURCE_NAMES if name != "analytics"
+    ):
+        raise V3ConfigError("non-analytics V3 sources must use local_fixture")
     return SourceSelectionConfig(**{name: value[name] for name in SOURCE_NAMES})
 
 
@@ -267,14 +339,16 @@ def _load_network_policy(value: object) -> NetworkPolicyConfig:
     if value["default"] not in {"deny", "allow"}:
         raise V3ConfigError("network_policy.default is invalid")
     if value["default"] != "deny":
-        raise V3ConfigError("Phase 2F-B requires a default-deny network policy")
+        raise V3ConfigError("V3 runtime requires a default-deny network policy")
     sources = value["sources"]
     if not isinstance(sources, dict) or set(sources) != _SOURCE_NAME_SET:
         raise V3ConfigError("network_policy must define exactly the six V3 sources")
     if any(sources[name] not in {"deny", "allow"} for name in SOURCE_NAMES):
         raise V3ConfigError("network_policy source value is invalid")
-    if any(sources[name] != "deny" for name in SOURCE_NAMES):
-        raise V3ConfigError("Phase 2F-B denies network access to every source")
+    if any(
+        sources[name] != "deny" for name in SOURCE_NAMES if name != "analytics"
+    ):
+        raise V3ConfigError("non-analytics V3 sources must deny network access")
     return NetworkPolicyConfig(
         default="deny",
         **{name: sources[name] for name in SOURCE_NAMES},
@@ -293,8 +367,8 @@ def _load_ga4_data_api(value: object) -> GA4DataAPIConfig:
     }
     if not isinstance(value, dict) or set(value) != expected:
         raise V3ConfigError("ga4_data_api is incomplete or unexpected")
-    if value["enabled"] is not False:
-        raise V3ConfigError("Phase 2F-B requires ga4_data_api.enabled=false")
+    if not isinstance(value["enabled"], bool):
+        raise V3ConfigError("ga4_data_api.enabled must be boolean")
     property_id = value["property_id"]
     if not isinstance(property_id, str) or not property_id.isdecimal() or int(property_id) <= 0:
         raise V3ConfigError("ga4_data_api.property_id is invalid")
@@ -328,7 +402,7 @@ def _load_ga4_data_api(value: object) -> GA4DataAPIConfig:
     if unmapped_policy != "exclude_from_commercial_signals":
         raise V3ConfigError("ga4_data_api unmapped-page policy is invalid")
     return GA4DataAPIConfig(
-        enabled=False,
+        enabled=value["enabled"],
         property_id=property_id,
         resource=resource,
         channel="Organic Search",

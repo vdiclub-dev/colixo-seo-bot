@@ -14,15 +14,24 @@ def render_markdown(
     scores: Sequence[OpportunityScore],
     recommendations: Sequence[Recommendation],
     source_counts: Mapping[str, int],
+    source_modes: Mapping[str, str],
 ) -> str:
     ranked = sorted(scores, key=lambda item: (-item.final_score, item.topic))
     by_topic = {item.topic: item for item in recommendations}
+    all_local_fixtures = bool(source_modes) and all(
+        mode == "local_fixture" for mode in source_modes.values()
+    )
+    executive_source = (
+        "local fixtures" if all_local_fixtures else "configured read-only sources"
+    )
     lines = [
         "# Colixo SEO / Market Intelligence Agent V3",
         "",
         "## 1. Executive summary",
         "",
-        "- FACT: {} opportunity topic(s) evaluated from local fixtures.".format(len(ranked)),
+        "- FACT: {} opportunity topic(s) evaluated from {}.".format(
+            len(ranked), executive_source
+        ),
         "- INFERENCE: Scores summarize known evidence only; unknown metrics are excluded.",
         "- RECOMMENDATION: Human review is required before any action.",
         "",
@@ -73,6 +82,36 @@ def render_markdown(
         for item in ranked
         if item.unknown_dimensions
     ]
+    provenance_lines = []
+    if all_local_fixtures:
+        provenance_lines.append(
+            "- FACT: Sources are local fixtures only: {}.".format(
+                ", ".join(
+                    "{}={}".format(name, count)
+                    for name, count in sorted(source_counts.items())
+                )
+                or "none"
+            )
+        )
+    else:
+        rendered_modes = []
+        for name, mode in sorted(source_modes.items()):
+            rendered_mode = (
+                "ga4_data_api(read-only)" if mode == "ga4_data_api" else mode
+            )
+            rendered_modes.append("{}={}".format(name, rendered_mode))
+        provenance_lines.extend(
+            [
+                "- FACT: Source modes: {}.".format(", ".join(rendered_modes)),
+                "- FACT: Source counts: {}.".format(
+                    ", ".join(
+                        "{}={}".format(name, count)
+                        for name, count in sorted(source_counts.items())
+                    )
+                    or "none"
+                ),
+            ]
+        )
     lines.extend(
         [
             "",
@@ -82,13 +121,7 @@ def render_markdown(
             "",
             "## 10. Safety / data provenance",
             "",
-            "- FACT: Sources are local fixtures only: {}.".format(
-                ", ".join(
-                    "{}={}".format(name, count)
-                    for name, count in sorted(source_counts.items())
-                )
-                or "none"
-            ),
+            *provenance_lines,
             "- FACT: Models contain aggregated metrics and no intentional personal data fields.",
             "- INFERENCE: Evidence confidence limits recommendation strength.",
             "- RECOMMENDATION: Keep V3 read-only and proposal-only until separately authorized.",
