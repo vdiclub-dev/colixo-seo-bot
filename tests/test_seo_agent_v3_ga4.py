@@ -372,35 +372,63 @@ def test_missing_or_multiple_total_rows_fail_closed():
         adapter(multiple).collect()
 
 
+def test_total_row_dimension_count_failure_is_context_specific():
+    total = row((GA4_TOTAL_DIMENSION_VALUE,), ("1", "1", "0"))
+    with pytest.raises(
+        GA4DataSourceError,
+        match="^TOTAL_ROW_DIMENSION_COUNT_INVALID$",
+    ):
+        adapter(fake_client(total_rows=(total,))).collect()
+
+
+def test_total_row_empty_dimension_failure_is_context_specific():
+    total = row((GA4_TOTAL_DIMENSION_VALUE, ""), ("1", "1", "0"))
+    with pytest.raises(
+        GA4DataSourceError,
+        match="^TOTAL_ROW_DIMENSION_VALUE_INVALID$",
+    ):
+        adapter(fake_client(total_rows=(total,))).collect()
+
+
 @pytest.mark.parametrize(
     "dimensions",
     [
-        (GA4_TOTAL_DIMENSION_VALUE,),
         (GA4_TOTAL_DIMENSION_VALUE, ORGANIC_SEARCH_CHANNEL),
         ("TOTAL", "TOTAL"),
     ],
 )
-def test_malformed_total_dimensions_fail_closed(dimensions):
-    client = fake_client(total_rows=(row(dimensions, ("1", "1", "0")),))
-    with pytest.raises(GA4DataSourceError, match="dimensions"):
-        adapter(client).collect()
+def test_well_shaped_wrong_total_dimensions_keep_existing_failure(dimensions):
+    total = row(dimensions, ("1", "1", "0"))
+    with pytest.raises(
+        GA4DataSourceError,
+        match="^GA4 total row dimensions are unexpected$",
+    ):
+        adapter(fake_client(total_rows=(total,))).collect()
 
 
-@pytest.mark.parametrize(
-    "metrics",
-    [
-        ("1", "1"),
-        ("1", "1", None),
-        ("1", "1", "NaN"),
-    ],
-)
-def test_malformed_total_metrics_fail_closed(metrics):
+def test_total_row_metric_count_failure_is_context_specific():
     total = row(
-        (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE), metrics
+        (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE),
+        ("1", "1"),
     )
-    client = fake_client(total_rows=(total,))
-    with pytest.raises(GA4DataSourceError, match="metric"):
-        adapter(client).collect()
+    with pytest.raises(
+        GA4DataSourceError,
+        match="^TOTAL_ROW_METRIC_COUNT_INVALID$",
+    ):
+        adapter(fake_client(total_rows=(total,))).collect()
+
+
+@pytest.mark.parametrize("invalid", [None, "", "NaN", "Infinity", "-0.1", True])
+def test_total_metric_value_failure_is_context_specific(invalid):
+    total = row(
+        (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE),
+        ("1", "1", invalid),
+    )
+    with pytest.raises(
+        GA4DataSourceError,
+        match="^TOTAL_METRIC_VALUE_INVALID$",
+    ):
+        adapter(fake_client(total_rows=(total,))).collect()
 
 
 def test_multiple_rows_per_topic_are_aggregated_deterministically():
@@ -466,8 +494,29 @@ def test_unknown_landing_pages_cannot_create_a_commercial_topic():
 @pytest.mark.parametrize("unsafe_path", ["/parcel?email=x", "/parcel#phone", "not-a-path", ""])
 def test_query_strings_fragments_and_malformed_paths_fail_closed(unsafe_path):
     client = fake_client((row((unsafe_path, ORGANIC_SEARCH_CHANNEL), ("1", "1", "0")),))
-    with pytest.raises(GA4DataSourceError, match="unsafe landingPage|row dimensions"):
+    with pytest.raises(
+        GA4DataSourceError,
+        match="unsafe landingPage|LANDING_ROW_DIMENSION_VALUE_INVALID",
+    ):
         adapter(client).collect()
+
+
+def test_landing_row_dimension_count_failure_is_context_specific():
+    landing = row(("/",), ("1", "1", "0"))
+    with pytest.raises(
+        GA4DataSourceError,
+        match="^LANDING_ROW_DIMENSION_COUNT_INVALID$",
+    ):
+        adapter(fake_client((landing,))).collect()
+
+
+def test_landing_row_empty_dimension_failure_is_context_specific():
+    landing = row(("", ORGANIC_SEARCH_CHANNEL), ("1", "1", "0"))
+    with pytest.raises(
+        GA4DataSourceError,
+        match="^LANDING_ROW_DIMENSION_VALUE_INVALID$",
+    ):
+        adapter(fake_client((landing,))).collect()
 
 
 def test_unexpected_channel_or_dimensions_fail_closed():
@@ -487,13 +536,19 @@ def test_unexpected_channel_or_dimensions_fail_closed():
 @pytest.mark.parametrize("invalid", [None, "", "NaN", "Infinity", "-0.1", True])
 def test_invalid_numeric_values_fail_closed(invalid):
     rows = (row(("/", ORGANIC_SEARCH_CHANNEL), (invalid, "1", "0")),)
-    with pytest.raises(GA4DataSourceError, match="metric"):
+    with pytest.raises(
+        GA4DataSourceError,
+        match="^LANDING_METRIC_VALUE_INVALID$",
+    ):
         adapter(fake_client(rows)).collect()
 
 
 def test_missing_or_changed_metric_fails_closed():
     missing_value = (row(("/", ORGANIC_SEARCH_CHANNEL), ("1", "1")),)
-    with pytest.raises(GA4DataSourceError, match="row metrics"):
+    with pytest.raises(
+        GA4DataSourceError,
+        match="^LANDING_ROW_METRIC_COUNT_INVALID$",
+    ):
         adapter(fake_client(missing_value)).collect()
 
     wrong_metric_headers = FakeClient(

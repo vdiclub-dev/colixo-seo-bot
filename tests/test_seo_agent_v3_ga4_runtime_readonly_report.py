@@ -346,7 +346,14 @@ def test_safe_failure_allowlist_is_exact_and_closed():
         "GA4_RESPONSE_SCHEMA_INVALID",
         "GA4_ROW_CHANNEL_INVALID",
         "GA4_LANDING_VALUE_INVALID",
-        "GA4_ROW_METRIC_INVALID",
+        "TOTAL_ROW_DIMENSION_COUNT_INVALID",
+        "TOTAL_ROW_DIMENSION_VALUE_INVALID",
+        "TOTAL_ROW_METRIC_COUNT_INVALID",
+        "TOTAL_METRIC_VALUE_INVALID",
+        "LANDING_ROW_DIMENSION_COUNT_INVALID",
+        "LANDING_ROW_DIMENSION_VALUE_INVALID",
+        "LANDING_ROW_METRIC_COUNT_INVALID",
+        "LANDING_METRIC_VALUE_INVALID",
         "GA4_MAPPED_TOTAL_EXCEEDS",
         "REPORT_COUNT_INVALID",
         "REPORT_RENDER_FAILED",
@@ -376,6 +383,34 @@ def test_safe_failure_allowlist_is_exact_and_closed():
             "GA4_TOTAL_DIMENSIONS_INVALID",
         ),
         (
+            response(total_rows=(row(
+                (GA4_TOTAL_DIMENSION_VALUE,),
+                ("0", "0", "0"),
+            ),)),
+            "TOTAL_ROW_DIMENSION_COUNT_INVALID",
+        ),
+        (
+            response(total_rows=(row(
+                (GA4_TOTAL_DIMENSION_VALUE, ""),
+                ("0", "0", "0"),
+            ),)),
+            "TOTAL_ROW_DIMENSION_VALUE_INVALID",
+        ),
+        (
+            response(total_rows=(row(
+                (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE),
+                ("0", "0"),
+            ),)),
+            "TOTAL_ROW_METRIC_COUNT_INVALID",
+        ),
+        (
+            response(total_rows=(row(
+                (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE),
+                ("0", "0", "not-a-number"),
+            ),)),
+            "TOTAL_METRIC_VALUE_INVALID",
+        ),
+        (
             response(dimensions=("landingPage",)),
             "GA4_RESPONSE_SCHEMA_INVALID",
         ),
@@ -401,11 +436,46 @@ def test_safe_failure_allowlist_is_exact_and_closed():
             "GA4_LANDING_VALUE_INVALID",
         ),
         (
-            response(total_rows=(row(
-                (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE),
-                ("not-a-number", "0", "0"),
-            ),)),
-            "GA4_ROW_METRIC_INVALID",
+            response(
+                rows=(row(("/",), ("1", "1", "0")),),
+                totals=("1", "1", "0"),
+            ),
+            "LANDING_ROW_DIMENSION_COUNT_INVALID",
+        ),
+        (
+            response(
+                rows=(row(("", ORGANIC_SEARCH_CHANNEL), ("1", "1", "0")),),
+                totals=("1", "1", "0"),
+            ),
+            "LANDING_ROW_DIMENSION_VALUE_INVALID",
+        ),
+        (
+            response(
+                rows=(row(("/", ORGANIC_SEARCH_CHANNEL), ("1", "1")),),
+                totals=("1", "1", "0"),
+            ),
+            "LANDING_ROW_METRIC_COUNT_INVALID",
+        ),
+        (
+            response(
+                rows=(row(("/", ORGANIC_SEARCH_CHANNEL), ("1", "1", None)),),
+                totals=("1", "1", "0"),
+            ),
+            "LANDING_METRIC_VALUE_INVALID",
+        ),
+        (
+            response(
+                rows=(row(("/", ORGANIC_SEARCH_CHANNEL), ("1", "1", "NaN")),),
+                totals=("1", "1", "0"),
+            ),
+            "LANDING_METRIC_VALUE_INVALID",
+        ),
+        (
+            response(
+                rows=(row(("/", ORGANIC_SEARCH_CHANNEL), ("1", "1", "-1")),),
+                totals=("1", "1", "0"),
+            ),
+            "LANDING_METRIC_VALUE_INVALID",
         ),
         (
             response(
