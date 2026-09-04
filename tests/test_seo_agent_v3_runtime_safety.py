@@ -10,11 +10,12 @@ import pytest
 import scripts.v3.agent as agent_module
 from scripts.v3.config import (
     SOURCE_NAMES,
+    RuntimeState,
     V3ConfigError,
     load_v3_config,
 )
 from scripts.v3.source_factory import (
-    LIVE_GA4_RUNTIME_ALLOWED,
+    GA4_READ_ONLY_RUNTIME_SUPPORTED,
     SourceAuthorizationError,
     authorize_source,
     build_source_adapters,
@@ -75,6 +76,7 @@ def _write_invalid_config(tmp_path, case):
 def test_current_config_is_typed_immutable_and_exactly_offline():
     config = load_v3_config()
 
+    assert config.runtime_state is RuntimeState.OFFLINE
     assert config.mode.read_only is True
     assert config.mode.proposal_only is True
     assert config.mode.network_enabled is False
@@ -171,7 +173,7 @@ def test_factory_is_default_deny_and_never_constructs_google_client(
     assert len(adapters) == 6
     with pytest.raises(SourceAuthorizationError, match="unknown"):
         authorize_source(config, "future_source", requires_network=False)
-    with pytest.raises(SourceAuthorizationError, match="disabled"):
+    with pytest.raises(SourceAuthorizationError, match="OFFLINE"):
         authorize_source(config, "analytics", requires_network=True)
 
 
@@ -182,7 +184,7 @@ def test_factory_revalidates_manually_constructed_config_before_construction():
         mode=replace(config.mode, network_enabled=True),
     )
 
-    with pytest.raises(V3ConfigError, match="offline mode"):
+    with pytest.raises(V3ConfigError, match="authorized V3 runtime state"):
         build_source_adapters(unsafe)
 
 
@@ -220,7 +222,7 @@ assert tuple(agent.adapters) == (
     assert completed.returncode == 0, completed.stderr
 
 
-def test_factory_has_no_dynamic_import_or_live_ga4_path():
+def test_factory_has_no_dynamic_import_or_secret_path():
     source = (ROOT / "scripts/v3/source_factory.py").read_text(encoding="utf-8")
     config_source = (ROOT / "scripts/v3/config.py").read_text(encoding="utf-8")
 
@@ -234,16 +236,16 @@ def test_factory_has_no_dynamic_import_or_live_ga4_path():
     ):
         assert prohibited not in source
         assert prohibited not in config_source
-    assert "GoogleAnalyticsDataSource" not in source
-    assert "create_google_analytics_data_client" not in source
-    assert "credential" not in source.lower()
-    assert LIVE_GA4_RUNTIME_ALLOWED is False
+    assert "GoogleAnalyticsDataSource" in source
+    assert "create_google_analytics_data_client" in source
+    assert "google.analytics" not in source
+    assert GA4_READ_ONLY_RUNTIME_SUPPORTED is True
 
 
 def test_agent_uses_central_factory_only():
     source = (ROOT / "scripts/v3/agent.py").read_text(encoding="utf-8")
 
-    assert "build_source_adapters(self.config)" in source
+    assert "build_source_adapters(" in source
     for class_name in (
         "SearchConsoleFixtureSource",
         "AnalyticsFixtureSource",
@@ -380,4 +382,4 @@ def test_conversion_safety_change_does_not_activate_live_ga4_runtime():
     assert payload["network_policy"]["default"] == "deny"
     assert payload["network_policy"]["sources"]["analytics"] == "deny"
     assert payload["ga4_data_api"]["enabled"] is False
-    assert LIVE_GA4_RUNTIME_ALLOWED is False
+    assert GA4_READ_ONLY_RUNTIME_SUPPORTED is True

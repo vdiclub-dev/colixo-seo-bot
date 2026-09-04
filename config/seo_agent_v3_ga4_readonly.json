@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "mode": {
+    "read_only": true,
+    "proposal_only": true,
+    "network_enabled": true,
+    "site_publication_enabled": false
+  },
+  "confidence_levels": [
+    "very_low",
+    "low",
+    "medium",
+    "high"
+  ],
+  "dimension_levels": [
+    "unknown",
+    "very_low",
+    "low",
+    "medium",
+    "high"
+  ],
+  "score_weights": {
+    "search_demand": 1.2,
+    "rank_opportunity": 1.2,
+    "commercial_fit": 1.4,
+    "conversion_signal": 1.2,
+    "competitive_gap": 1.0,
+    "reputation_gap": 0.8,
+    "evidence_confidence": 1.2
+  },
+  "recommendation_policy": {
+    "strong_min_score": 75,
+    "strong_min_confidence": "medium",
+    "strong_min_known_dimensions": 4
+  },
+  "phase_1_sources": {
+    "search_console": "local_fixture",
+    "analytics": "ga4_data_api",
+    "rank_tracker": "local_fixture",
+    "competitors": "local_fixture",
+    "reviews": "local_fixture",
+    "business_metrics": "local_fixture"
+  },
+  "network_policy": {
+    "default": "deny",
+    "sources": {
+      "search_console": "deny",
+      "analytics": "allow",
+      "rank_tracker": "deny",
+      "competitors": "deny",
+      "reviews": "deny",
+      "business_metrics": "deny"
+    }
+  },
+  "ga4_data_api": {
+    "enabled": true,
+    "property_id": "552715460",
+    "resource": "properties/552715460",
+    "channel": "Organic Search",
+    "date_range": {
+      "start_date": "28daysAgo",
+      "end_date": "yesterday"
+    },
+    "landing_page_topics": {
+      "/": "general_delivery",
+      "/business-plus": "business_delivery",
+      "/portail-client/livraison-colis-suisse-romande": "parcel_delivery",
+      "/portail-client/livraison-vins-vignerons-suisse-romande": "wine_delivery",
+      "/portail-client/envoi-securise-horlogerie": "secure_watch_delivery"
+    },
+    "unmapped_and_legal_pages": "exclude_from_commercial_signals"
+  },
+  "privacy": {
+    "aggregated_only": true,
+    "personal_data_allowed": false,
+    "full_review_text_allowed": false
+  }
+}
