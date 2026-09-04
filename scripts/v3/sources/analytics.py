@@ -165,7 +165,7 @@ class GoogleAnalyticsDataSource:
         totals = tuple(getattr(response, "totals", ()) or ())
         if len(totals) != 1:
             raise GA4DataSourceError("GA4 response must contain exactly one total row")
-        dimensions, metrics = self._row_values(totals[0], 2)
+        dimensions, metrics = self._row_values(totals[0], "TOTAL")
         if dimensions != (
             GA4_TOTAL_DIMENSION_VALUE,
             GA4_TOTAL_DIMENSION_VALUE,
@@ -179,7 +179,7 @@ class GoogleAnalyticsDataSource:
         self._validate_headers(response, GA4_LANDING_PAGE_DIMENSIONS)
         normalized = []
         for row in tuple(getattr(response, "rows", ()) or ()):
-            dimensions, metrics = self._row_values(row, 2)
+            dimensions, metrics = self._row_values(row, "LANDING")
             landing_page, channel = dimensions
             if channel != ORGANIC_SEARCH_CHANNEL:
                 raise GA4DataSourceError("GA4 response contains an unexpected channel")
@@ -230,20 +230,29 @@ class GoogleAnalyticsDataSource:
             raise GA4DataSourceError("GA4 response metrics are unexpected")
 
     def _row_values(
-        self, row: Any, dimension_count: int
+        self, row: Any, context: str
     ) -> Tuple[Tuple[str, ...], Tuple[Decimal, Decimal, Decimal]]:
         dimensions = tuple(
             str(getattr(item, "value", ""))
             for item in tuple(getattr(row, "dimension_values", ()) or ())
         )
-        metrics = tuple(
-            _parse_metric(getattr(item, "value", None))
+        if len(dimensions) != len(GA4_LANDING_PAGE_DIMENSIONS):
+            raise GA4DataSourceError(
+                "{}_ROW_DIMENSION_COUNT_INVALID".format(context)
+            )
+        if any(not value for value in dimensions):
+            raise GA4DataSourceError(
+                "{}_ROW_DIMENSION_VALUE_INVALID".format(context)
+            )
+        raw_metrics = tuple(
+            getattr(item, "value", None)
             for item in tuple(getattr(row, "metric_values", ()) or ())
         )
-        if len(dimensions) != dimension_count or any(not value for value in dimensions):
-            raise GA4DataSourceError("GA4 response row dimensions are malformed")
-        if len(metrics) != len(GA4_METRICS):
-            raise GA4DataSourceError("GA4 response row metrics are malformed")
+        if len(raw_metrics) != len(GA4_METRICS):
+            raise GA4DataSourceError(
+                "{}_ROW_METRIC_COUNT_INVALID".format(context)
+            )
+        metrics = tuple(_parse_metric(value, context) for value in raw_metrics)
         return dimensions, metrics
 
     def _aggregate_rows(
@@ -306,15 +315,16 @@ class GoogleAnalyticsDataSource:
         return tuple(signals)
 
 
-def _parse_metric(value: Any) -> Decimal:
+def _parse_metric(value: Any, context: str) -> Decimal:
+    failure_code = "{}_METRIC_VALUE_INVALID".format(context)
     if value is None or isinstance(value, bool):
-        raise GA4DataSourceError("GA4 metric is missing or invalid")
+        raise GA4DataSourceError(failure_code)
     try:
         parsed = Decimal(str(value))
     except (InvalidOperation, ValueError):
-        raise GA4DataSourceError("GA4 metric is missing or invalid") from None
+        raise GA4DataSourceError(failure_code) from None
     if not parsed.is_finite() or parsed < 0:
-        raise GA4DataSourceError("GA4 metric is missing or invalid")
+        raise GA4DataSourceError(failure_code)
     return parsed
 
 
