@@ -7,11 +7,11 @@ from typing import Any, Callable, Iterable, Mapping, Tuple
 from scripts.v3.models import TrafficSignal
 from scripts.v3.sources.analytics import (
     DEFAULT_GA4_LANDING_PAGE_TOPICS,
-    GA4_CHANNEL_DIMENSIONS,
     GA4_LANDING_PAGE_DIMENSIONS,
     GA4_METRICS,
     GA4_PROPERTY_ID,
     GA4_RESOURCE,
+    GA4_TOTAL_DIMENSION_VALUE,
     ORGANIC_SEARCH_CHANNEL,
     GoogleAnalyticsDataSource,
     create_google_analytics_data_client,
@@ -23,7 +23,7 @@ AUTH_MODE = "WIF"
 START_DATE = "2026-09-03"
 END_DATE = "2026-09-03"
 OBSERVED_AT = "2026-09-04"
-EXPECTED_REPORT_CALLS = 2
+EXPECTED_REPORT_CALLS = 1
 PASS_VERDICT = "GA4_ORGANIC_COVERAGE_DIAGNOSTIC_PASS"
 FAIL_VERDICT = "GA4_ORGANIC_COVERAGE_DIAGNOSTIC_FAILED"
 
@@ -95,10 +95,7 @@ class RecordingClient:
         self.responses = []
 
     def run_report(self, *, request: Mapping[str, Any]) -> Any:
-        expected = (
-            _expected_request(GA4_CHANNEL_DIMENSIONS),
-            _expected_request(GA4_LANDING_PAGE_DIMENSIONS),
-        )
+        expected = (_expected_request(),)
         request_index = len(self.requests)
         if request_index >= EXPECTED_REPORT_CALLS or request != expected[request_index]:
             raise GA4OrganicCoverageDiagnosticError(
@@ -146,11 +143,13 @@ def run_diagnostic(
     return result
 
 
-def _expected_request(dimensions: Tuple[str, ...]) -> Mapping[str, Any]:
+def _expected_request() -> Mapping[str, Any]:
     return {
         "property": GA4_RESOURCE,
         "date_ranges": [{"start_date": START_DATE, "end_date": END_DATE}],
-        "dimensions": [{"name": name} for name in dimensions],
+        "dimensions": [
+            {"name": name} for name in GA4_LANDING_PAGE_DIMENSIONS
+        ],
         "metrics": [{"name": name} for name in GA4_METRICS],
         "dimension_filter": {
             "filter": {
@@ -162,15 +161,13 @@ def _expected_request(dimensions: Tuple[str, ...]) -> Mapping[str, Any]:
                 },
             }
         },
+        "metric_aggregations": ["TOTAL"],
     }
 
 
 def _validate_request_contract(requests: Iterable[Mapping[str, Any]]) -> None:
     recorded = tuple(requests)
-    expected = (
-        _expected_request(GA4_CHANNEL_DIMENSIONS),
-        _expected_request(GA4_LANDING_PAGE_DIMENSIONS),
-    )
+    expected = (_expected_request(),)
     if len(recorded) != EXPECTED_REPORT_CALLS or recorded != expected:
         raise GA4OrganicCoverageDiagnosticError(
             "GA4 requests do not match the diagnostic contract"
@@ -180,9 +177,9 @@ def _validate_request_contract(requests: Iterable[Mapping[str, Any]]) -> None:
 def _build_coverage_result(
     responses: Iterable[Any], signals: Iterable[TrafficSignal]
 ) -> CoverageResult:
-    channel_response, landing_response = tuple(responses)
-    organic_totals = _parse_channel_response(channel_response)
-    categories = _parse_landing_response(landing_response)
+    (response,) = tuple(responses)
+    organic_totals = _parse_total_response(response)
+    categories = _parse_landing_response(response)
     mapped = categories[MAPPED_COMMERCIAL]
     unmapped = categories[UNMAPPED_OR_EXCLUDED]
     not_set = categories[NOT_SET]
@@ -213,17 +210,24 @@ def _build_coverage_result(
     )
 
 
-def _parse_channel_response(response: Any) -> Metrics:
-    _validate_headers(response, GA4_CHANNEL_DIMENSIONS)
-    total = Metrics()
-    for row in tuple(getattr(response, "rows", ()) or ()):
-        dimensions, metrics = _row_values(row, len(GA4_CHANNEL_DIMENSIONS))
-        if dimensions != (ORGANIC_SEARCH_CHANNEL,):
-            raise GA4OrganicCoverageDiagnosticError(
-                "GA4 channel response is unexpected"
-            )
-        total += metrics
-    return total
+def _parse_total_response(response: Any) -> Metrics:
+    _validate_headers(response, GA4_LANDING_PAGE_DIMENSIONS)
+    totals = tuple(getattr(response, "totals", ()) or ())
+    if len(totals) != 1:
+        raise GA4OrganicCoverageDiagnosticError(
+            "GA4 response must contain exactly one total row"
+        )
+    dimensions, metrics = _row_values(
+        totals[0], len(GA4_LANDING_PAGE_DIMENSIONS)
+    )
+    if dimensions != (
+        GA4_TOTAL_DIMENSION_VALUE,
+        GA4_TOTAL_DIMENSION_VALUE,
+    ):
+        raise GA4OrganicCoverageDiagnosticError(
+            "GA4 total row dimensions are unexpected"
+        )
+    return metrics
 
 
 def _parse_landing_response(response: Any) -> Mapping[str, CategorySummary]:
