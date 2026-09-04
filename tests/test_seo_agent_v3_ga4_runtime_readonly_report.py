@@ -225,8 +225,8 @@ def test_zero_ga4_topics_is_a_successful_single_call_runtime_report():
 
 def test_mapped_ga4_topic_preserves_non_conversion_semantics_and_provenance():
     client = FakeClient(response(
-        rows=(row(("/", ORGANIC_SEARCH_CHANNEL), ("6", "3", "2")),),
-        totals=("6", "3", "2"),
+        rows=(row(("/", ORGANIC_SEARCH_CHANNEL), ("6", "3", "0")),),
+        total_rows=(row((), ("6", "3", "0")),),
     ))
     output = []
 
@@ -246,10 +246,37 @@ def test_mapped_ga4_topic_preserves_non_conversion_semantics_and_provenance():
     evidence = execution.result.recommendations[0].evidence[0]
     assert evidence.fact["organic_sessions"] == 6.0
     assert evidence.fact["engaged_sessions"] == 3.0
-    assert evidence.fact["key_events"] == 2.0
-    assert "key_events=2" not in "\n".join(output)
+    assert evidence.fact["key_events"] == 0.0
+    assert "key_events=0" not in "\n".join(output)
     assert "analytics=ga4_data_api(read-only)" in execution.result.markdown
     assert "search_console=local_fixture" in execution.result.markdown
+
+
+@pytest.mark.parametrize(
+    "total_dimensions",
+    (
+        (),
+        (GA4_TOTAL_DIMENSION_VALUE,),
+        (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE),
+        ("ignored", "", None, "metadata"),
+    ),
+)
+def test_runtime_ignores_non_semantic_total_dimensions(total_dimensions):
+    client = FakeClient(response(total_rows=(row(
+        total_dimensions,
+        ("0", "0", "0"),
+    ),)))
+    output = []
+
+    execution = run_runtime_report(
+        observed_at="2026-09-04",
+        client_factory=lambda: client,
+        emit=output.append,
+    )
+
+    assert execution.report_calls == len(client.requests) == 1
+    assert execution.result.scores == ()
+    assert output[-1] == "FINAL_VERDICT={}".format(PASS_VERDICT)
 
 
 def test_unknown_landing_paths_and_raw_evidence_are_not_written_to_output():
@@ -377,24 +404,6 @@ def test_safe_failure_allowlist_is_exact_and_closed():
                 ),
             )),
             "GA4_TOTAL_ROW_COUNT_INVALID",
-        ),
-        (
-            response(total_rows=(row(("TOTAL", "TOTAL"), ("0", "0", "0")),)),
-            "GA4_TOTAL_DIMENSIONS_INVALID",
-        ),
-        (
-            response(total_rows=(row(
-                (GA4_TOTAL_DIMENSION_VALUE,),
-                ("0", "0", "0"),
-            ),)),
-            "TOTAL_ROW_DIMENSION_COUNT_INVALID",
-        ),
-        (
-            response(total_rows=(row(
-                (GA4_TOTAL_DIMENSION_VALUE, ""),
-                ("0", "0", "0"),
-            ),)),
-            "TOTAL_ROW_DIMENSION_VALUE_INVALID",
         ),
         (
             response(total_rows=(row(

@@ -372,38 +372,31 @@ def test_missing_or_multiple_total_rows_fail_closed():
         adapter(multiple).collect()
 
 
-def test_total_row_dimension_count_failure_is_context_specific():
-    total = row((GA4_TOTAL_DIMENSION_VALUE,), ("1", "1", "0"))
-    with pytest.raises(
-        GA4DataSourceError,
-        match="^TOTAL_ROW_DIMENSION_COUNT_INVALID$",
-    ):
-        adapter(fake_client(total_rows=(total,))).collect()
-
-
-def test_total_row_empty_dimension_failure_is_context_specific():
-    total = row((GA4_TOTAL_DIMENSION_VALUE, ""), ("1", "1", "0"))
-    with pytest.raises(
-        GA4DataSourceError,
-        match="^TOTAL_ROW_DIMENSION_VALUE_INVALID$",
-    ):
-        adapter(fake_client(total_rows=(total,))).collect()
-
-
 @pytest.mark.parametrize(
     "dimensions",
     [
-        (GA4_TOTAL_DIMENSION_VALUE, ORGANIC_SEARCH_CHANNEL),
-        ("TOTAL", "TOTAL"),
+        (),
+        (GA4_TOTAL_DIMENSION_VALUE,),
+        (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE),
+        ("ignored", "", None, "metadata"),
     ],
 )
-def test_well_shaped_wrong_total_dimensions_keep_existing_failure(dimensions):
-    total = row(dimensions, ("1", "1", "0"))
-    with pytest.raises(
-        GA4DataSourceError,
-        match="^GA4 total row dimensions are unexpected$",
-    ):
-        adapter(fake_client(total_rows=(total,))).collect()
+def test_total_row_dimensions_are_non_semantic_metadata(dimensions):
+    total = row(dimensions, ("6", "3", "0"))
+    landing = row(("/", ORGANIC_SEARCH_CHANNEL), ("6", "3", "0"))
+    client = fake_client((landing,), total_rows=(total,))
+
+    signal = adapter(client).collect()[0]
+
+    assert signal.organic_sessions == 6
+    assert signal.engaged_sessions == 3
+    assert signal.conversions is None
+    assert signal.evidence[0].fact["organic_channel_totals"] == {
+        "sessions": 6.0,
+        "engaged_sessions": 3.0,
+        "key_events": 0.0,
+    }
+    assert len(client.requests) == 1
 
 
 def test_total_row_metric_count_failure_is_context_specific():
