@@ -6,8 +6,10 @@ from pathlib import Path
 
 import pytest
 
+from scripts.v3 import ga4_runtime_readonly_report as runner_module
 from scripts.v3.ga4_runtime_readonly_report import (
     FAIL_VERDICT,
+    SAFE_FAILURE_CODES,
     GA4RuntimeReadOnlyReportError,
     PASS_VERDICT,
     CountingGA4Client,
@@ -34,6 +36,7 @@ PROVIDER = (
     "github/providers/colixo-seo-bot"
 )
 SERVICE_ACCOUNT = "colixo-seo-ga4-reader@colixo-seo-agent.iam.gserviceaccount.com"
+_DEFAULT_TOTAL_ROWS = object()
 
 
 @dataclass(frozen=True)
@@ -79,16 +82,33 @@ def row(dimensions, metrics):
     )
 
 
-def response(rows=(), totals=("0", "0", "0")):
-    return Response(
-        dimension_headers=tuple(Header(name) for name in GA4_LANDING_PAGE_DIMENSIONS),
-        metric_headers=tuple(Header(name) for name in GA4_METRICS),
-        rows=tuple(rows),
-        totals=(row(
+def response(
+    rows=(),
+    totals=("0", "0", "0"),
+    *,
+    total_rows=_DEFAULT_TOTAL_ROWS,
+    dimensions=GA4_LANDING_PAGE_DIMENSIONS,
+    metrics=GA4_METRICS,
+):
+    if total_rows is _DEFAULT_TOTAL_ROWS:
+        total_rows = (row(
             (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE),
             totals,
-        ),),
+        ),)
+    return Response(
+        dimension_headers=tuple(Header(name) for name in dimensions),
+        metric_headers=tuple(Header(name) for name in metrics),
+        rows=tuple(rows),
+        totals=tuple(total_rows),
     )
+
+
+def failure_output(code, calls):
+    return [
+        "SAFE_FAILURE_CODE={}".format(code),
+        "REPORT_CALLS_COMPLETED={}".format(calls),
+        "FINAL_VERDICT={}".format(FAIL_VERDICT),
+    ]
 
 
 @pytest.fixture(autouse=True)
@@ -111,7 +131,7 @@ def test_explicit_observed_at_is_required_before_client_creation():
 
     output = []
     assert main((), client_factory=factory, emit=output.append) == 1
-    assert output == ["FINAL_VERDICT={}".format(FAIL_VERDICT)]
+    assert output == failure_output("OBSERVED_AT_INVALID", 0)
     assert factory_calls == []
 
 
@@ -126,13 +146,50 @@ def test_invalid_observed_at_fails_before_client_creation(observed_at):
         factory_calls.append(True)
         return FakeClient(response())
 
-    with pytest.raises(GA4RuntimeReadOnlyReportError):
+    with pytest.raises(GA4RuntimeReadOnlyReportError) as failure:
         run_runtime_report(
             observed_at=observed_at,
             client_factory=factory,
             emit=lambda _line: None,
         )
+    assert failure.value.safe_code == "OBSERVED_AT_INVALID"
+    assert failure.value.report_calls_completed == 0
     assert factory_calls == []
+
+
+def test_client_factory_failure_is_safe_and_happens_before_any_report_call():
+    sensitive = "token credential /private/adc.json?email=secret@example.invalid"
+    output = []
+
+    assert main(
+        ("--observed-at", "2026-09-04"),
+        client_factory=lambda: (_ for _ in ()).throw(RuntimeError(sensitive)),
+        emit=output.append,
+    ) == 1
+    assert output == failure_output("CLIENT_CREATION_FAILED", 0)
+    assert sensitive not in "\n".join(output)
+
+
+def test_runtime_construction_failure_is_safe_and_precedes_client_creation(
+    monkeypatch,
+):
+    sensitive = "credential internals /private/runtime/path"
+    factory_calls = []
+
+    class FailingAgent:
+        def __init__(self, *_args, **_kwargs):
+            raise RuntimeError(sensitive)
+
+    monkeypatch.setattr(runner_module, "MarketIntelligenceAgent", FailingAgent)
+    output = []
+    assert main(
+        ("--observed-at", "2026-09-04"),
+        client_factory=lambda: factory_calls.append(True),
+        emit=output.append,
+    ) == 1
+    assert output == failure_output("RUNTIME_CONSTRUCTION_FAILED", 0)
+    assert factory_calls == []
+    assert sensitive not in "\n".join(output)
 
 
 def test_zero_ga4_topics_is_a_successful_single_call_runtime_report():
@@ -229,7 +286,7 @@ def test_underlying_api_exception_is_sanitized_and_never_retried():
         emit=output.append,
     ) == 1
     assert len(client.requests) == 1
-    assert output == ["FINAL_VERDICT={}".format(FAIL_VERDICT)]
+    assert output == failure_output("GA4_API_REQUEST_FAILED", 1)
     assert sensitive not in "\n".join(output)
 
 
@@ -238,11 +295,170 @@ def test_counting_client_blocks_a_second_call_without_forwarding_it():
     counted = CountingGA4Client(client)
 
     counted.run_report(request={"safe": True})
-    with pytest.raises(GA4RuntimeReadOnlyReportError, match="limit"):
+    with pytest.raises(GA4RuntimeReadOnlyReportError) as failure:
         counted.run_report(request={"safe": True})
+    assert failure.value.safe_code == "REPORT_COUNT_INVALID"
+    assert failure.value.report_calls_completed == 1
     assert counted.report_calls == 1
+    assert counted.api_failed is False
     assert len(client.requests) == 1
-    assert set(vars(counted)) == {"_client", "report_calls"}
+    assert set(CountingGA4Client.__slots__) == {
+        "report_calls",
+        "api_failed",
+    }
+    for prohibited in ("request", "response", "exception", "error"):
+        assert not hasattr(counted, prohibited)
+
+
+def test_second_runtime_call_maps_to_report_count_invalid(monkeypatch):
+    client = FakeClient(response())
+
+    class DoubleCallAgent:
+        def __init__(self, *_args, ga4_client_factory, **_kwargs):
+            self.config = type("Config", (), {
+                "runtime_state": runner_module.RuntimeState.GA4_READ_ONLY,
+            })()
+            self.client = ga4_client_factory()
+
+        def run(self, _fixtures):
+            self.client.run_report(request={"ordinal": 1})
+            self.client.run_report(request={"ordinal": 2})
+
+    monkeypatch.setattr(runner_module, "MarketIntelligenceAgent", DoubleCallAgent)
+    output = []
+    assert main(
+        ("--observed-at", "2026-09-04"),
+        client_factory=lambda: client,
+        emit=output.append,
+    ) == 1
+    assert output == failure_output("REPORT_COUNT_INVALID", 1)
+    assert len(client.requests) == 1
+
+
+def test_safe_failure_allowlist_is_exact_and_closed():
+    assert SAFE_FAILURE_CODES == (
+        "OBSERVED_AT_INVALID",
+        "CLIENT_CREATION_FAILED",
+        "RUNTIME_CONSTRUCTION_FAILED",
+        "GA4_API_REQUEST_FAILED",
+        "GA4_TOTAL_ROW_COUNT_INVALID",
+        "GA4_TOTAL_DIMENSIONS_INVALID",
+        "GA4_RESPONSE_SCHEMA_INVALID",
+        "GA4_ROW_CHANNEL_INVALID",
+        "GA4_LANDING_VALUE_INVALID",
+        "GA4_ROW_METRIC_INVALID",
+        "GA4_MAPPED_TOTAL_EXCEEDS",
+        "REPORT_COUNT_INVALID",
+        "REPORT_RENDER_FAILED",
+        "UNEXPECTED_RUNTIME_FAILURE",
+    )
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_code"),
+    (
+        (response(total_rows=()), "GA4_TOTAL_ROW_COUNT_INVALID"),
+        (
+            response(total_rows=(
+                row(
+                    (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE),
+                    ("0", "0", "0"),
+                ),
+                row(
+                    (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE),
+                    ("0", "0", "0"),
+                ),
+            )),
+            "GA4_TOTAL_ROW_COUNT_INVALID",
+        ),
+        (
+            response(total_rows=(row(("TOTAL", "TOTAL"), ("0", "0", "0")),)),
+            "GA4_TOTAL_DIMENSIONS_INVALID",
+        ),
+        (
+            response(dimensions=("landingPage",)),
+            "GA4_RESPONSE_SCHEMA_INVALID",
+        ),
+        (
+            response(metrics=("sessions", "engagedSessions")),
+            "GA4_RESPONSE_SCHEMA_INVALID",
+        ),
+        (
+            response(
+                rows=(row(("/", "Direct"), ("1", "1", "0")),),
+                totals=("1", "1", "0"),
+            ),
+            "GA4_ROW_CHANNEL_INVALID",
+        ),
+        (
+            response(
+                rows=(row(
+                    ("/unsafe?token=redacted", ORGANIC_SEARCH_CHANNEL),
+                    ("1", "1", "0"),
+                ),),
+                totals=("1", "1", "0"),
+            ),
+            "GA4_LANDING_VALUE_INVALID",
+        ),
+        (
+            response(total_rows=(row(
+                (GA4_TOTAL_DIMENSION_VALUE, GA4_TOTAL_DIMENSION_VALUE),
+                ("not-a-number", "0", "0"),
+            ),)),
+            "GA4_ROW_METRIC_INVALID",
+        ),
+        (
+            response(
+                rows=(row(("/", ORGANIC_SEARCH_CHANNEL), ("2", "1", "0")),),
+                totals=("1", "1", "0"),
+            ),
+            "GA4_MAPPED_TOTAL_EXCEEDS",
+        ),
+    ),
+)
+def test_adapter_failures_map_to_exact_safe_codes(payload, expected_code):
+    client = FakeClient(payload)
+    output = []
+
+    assert main(
+        ("--observed-at", "2026-09-04"),
+        client_factory=lambda: client,
+        emit=output.append,
+    ) == 1
+    assert len(client.requests) == 1
+    assert output == failure_output(expected_code, 1)
+    rendered = "\n".join(output)
+    for prohibited in (
+        "unsafe?",
+        "not-a-number",
+        "dimension_values",
+        "metric_values",
+        "Traceback",
+    ):
+        assert prohibited not in rendered
+
+
+def test_unexpected_runtime_failure_is_sanitized(monkeypatch):
+    sensitive = "raw response credential token landingPage=/private"
+
+    class FailingAgent:
+        def __init__(self, *_args, **_kwargs):
+            self.config = type("Config", (), {
+                "runtime_state": runner_module.RuntimeState.GA4_READ_ONLY,
+            })()
+
+        def run(self, _fixtures):
+            raise RuntimeError(sensitive)
+
+    monkeypatch.setattr(runner_module, "MarketIntelligenceAgent", FailingAgent)
+    output = []
+    assert main(
+        ("--observed-at", "2026-09-04"),
+        client_factory=lambda: FakeClient(response()),
+        emit=output.append,
+    ) == 1
+    assert output == failure_output("UNEXPECTED_RUNTIME_FAILURE", 0)
+    assert sensitive not in "\n".join(output)
 
 
 def test_runner_has_no_fixture_fallback_parallel_scoring_or_implicit_clock():
