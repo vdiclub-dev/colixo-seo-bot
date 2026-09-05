@@ -97,13 +97,14 @@ def _write_config(tmp_path, mutate):
     return path
 
 
-def test_exactly_two_runtime_states_are_allowlisted_and_default_is_offline():
+def test_exactly_three_runtime_states_are_allowlisted_and_default_is_offline():
     offline = load_v3_config(OFFLINE_CONFIG)
     ga4 = load_v3_config(GA4_CONFIG)
 
     assert tuple(RuntimeState) == (
         RuntimeState.OFFLINE,
         RuntimeState.GA4_READ_ONLY,
+        RuntimeState.GSC_READ_ONLY,
     )
     assert offline.runtime_state is RuntimeState.OFFLINE
     assert ga4.runtime_state is RuntimeState.GA4_READ_ONLY

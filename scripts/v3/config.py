@@ -1,4 +1,4 @@
-"""Fail-closed configuration loader for the two authorized V3 runtimes."""
+"""Fail-closed configuration loader for the three authorized V3 runtimes."""
 
 import json
 from dataclasses import dataclass
@@ -38,6 +38,7 @@ _TOP_LEVEL_FIELDS = {
     "phase_1_sources",
     "network_policy",
     "ga4_data_api",
+    "gsc_search_analytics",
     "privacy",
 }
 
@@ -51,6 +52,33 @@ class RuntimeState(str, Enum):
 
     OFFLINE = "OFFLINE"
     GA4_READ_ONLY = "GA4_READ_ONLY"
+    GSC_READ_ONLY = "GSC_READ_ONLY"
+
+
+GSC_CONTRACT = MappingProxyType({
+    "property": "sc-domain:colixo.ch", "type": "web", "data_state": "final",
+    "dimension": "query", "row_limit": 25000,
+    "start_offset_days": 28, "end_offset_days": 3,
+    "brand": "coverage_only", "unmapped": "coverage_only", "pii": "exclude",
+    "pagination": "disabled", "totals_scope": "returned_query_rows_non_exhaustive",
+})
+
+
+@dataclass(frozen=True)
+class GSCSearchAnalyticsConfig:
+    enabled: bool
+    contract: Tuple[Tuple[str, object], ...]
+
+
+def _load_gsc(value: object) -> GSCSearchAnalyticsConfig:
+    if not isinstance(value, dict) or set(value) != {"enabled", *GSC_CONTRACT}:
+        raise V3ConfigError("gsc_search_analytics must be explicit and complete")
+    if type(value["enabled"]) is not bool or any(
+        type(value[key]) is not type(expected) or value[key] != expected
+        for key, expected in GSC_CONTRACT.items()
+    ):
+        raise V3ConfigError("gsc_search_analytics contract is immutable")
+    return GSCSearchAnalyticsConfig(value["enabled"], tuple(sorted(GSC_CONTRACT.items())))
 
 
 @dataclass(frozen=True)
@@ -136,6 +164,7 @@ class V3Config:
     phase_1_sources: SourceSelectionConfig
     network_policy: NetworkPolicyConfig
     ga4_data_api: GA4DataAPIConfig
+    gsc_search_analytics: GSCSearchAnalyticsConfig
     score_weights: Mapping[str, float]
     recommendation_policy: RecommendationPolicy
     source_path: Path
@@ -164,6 +193,7 @@ def load_v3_config(path: Optional[Path] = None) -> V3Config:
     source_selection = _load_source_selection(payload.get("phase_1_sources"))
     network_policy = _load_network_policy(payload.get("network_policy"))
     ga4_data_api = _load_ga4_data_api(payload.get("ga4_data_api"))
+    gsc = _load_gsc(payload.get("gsc_search_analytics"))
     _validate_privacy(payload.get("privacy"))
 
     weights = payload.get("score_weights")
@@ -200,6 +230,7 @@ def load_v3_config(path: Optional[Path] = None) -> V3Config:
         source_selection,
         network_policy,
         ga4_data_api,
+        gsc,
     )
     config = V3Config(
         runtime_state=runtime_state,
@@ -207,6 +238,7 @@ def load_v3_config(path: Optional[Path] = None) -> V3Config:
         phase_1_sources=source_selection,
         network_policy=network_policy,
         ga4_data_api=ga4_data_api,
+        gsc_search_analytics=gsc,
         score_weights=MappingProxyType(normalized_weights),
         recommendation_policy=RecommendationPolicy(
             strong_min_score=min_score,
@@ -229,6 +261,7 @@ def validate_runtime_state(config: V3Config) -> RuntimeState:
         config.phase_1_sources,
         config.network_policy,
         config.ga4_data_api,
+        config.gsc_search_analytics,
     )
     if config.runtime_state is not runtime_state:
         raise V3ConfigError("V3 runtime state marker does not match its configuration")
@@ -247,9 +280,14 @@ def _derive_runtime_state(
     source_selection: SourceSelectionConfig,
     network_policy: NetworkPolicyConfig,
     ga4_data_api: GA4DataAPIConfig,
+    gsc: GSCSearchAnalyticsConfig,
 ) -> RuntimeState:
     """Return one exact state; partial, mixed, and unknown states fail closed."""
 
+    if not isinstance(gsc, GSCSearchAnalyticsConfig):
+        raise V3ConfigError("validated GSC configuration required")
+    if type(gsc.enabled) is not bool or gsc.contract != tuple(sorted(GSC_CONTRACT.items())):
+        raise V3ConfigError("gsc_search_analytics contract is immutable")
     if (
         mode.read_only is not True
         or mode.proposal_only is not True
@@ -270,6 +308,7 @@ def _derive_runtime_state(
         and all_fixtures
         and all_denied
         and ga4_data_api.enabled is False
+        and gsc.enabled is False
     ):
         return RuntimeState.OFFLINE
 
@@ -290,8 +329,20 @@ def _derive_runtime_state(
         and network_policy.analytics == "allow"
         and non_analytics_network_is_denied
         and ga4_data_api.enabled is True
+        and gsc.enabled is False
     ):
         return RuntimeState.GA4_READ_ONLY
+
+    if (
+        mode.network_enabled is True and gsc.enabled is True
+        and ga4_data_api.enabled is False
+        and source_selection.search_console == "gsc_search_analytics_api"
+        and network_policy.search_console == "allow"
+        and all(source_selection.value_for(n) == "local_fixture"
+                and network_policy.value_for(n) == "deny"
+                for n in SOURCE_NAMES if n != "search_console")
+    ):
+        return RuntimeState.GSC_READ_ONLY
 
     raise V3ConfigError("configuration is not an authorized V3 runtime state")
 
@@ -327,9 +378,11 @@ def _load_source_selection(value: object) -> SourceSelectionConfig:
     if value["analytics"] not in {"local_fixture", "ga4_data_api"}:
         raise V3ConfigError("analytics source adapter is invalid")
     if any(
-        value[name] != "local_fixture" for name in SOURCE_NAMES if name != "analytics"
+        value[name] != "local_fixture" for name in SOURCE_NAMES if name not in {"analytics", "search_console"}
     ):
         raise V3ConfigError("non-analytics V3 sources must use local_fixture")
+    if value["search_console"] not in {"local_fixture", "gsc_search_analytics_api"}:
+        raise V3ConfigError("search_console source adapter is invalid")
     return SourceSelectionConfig(**{name: value[name] for name in SOURCE_NAMES})
 
 
@@ -346,7 +399,7 @@ def _load_network_policy(value: object) -> NetworkPolicyConfig:
     if any(sources[name] not in {"deny", "allow"} for name in SOURCE_NAMES):
         raise V3ConfigError("network_policy source value is invalid")
     if any(
-        sources[name] != "deny" for name in SOURCE_NAMES if name != "analytics"
+        sources[name] != "deny" for name in SOURCE_NAMES if name not in {"analytics", "search_console"}
     ):
         raise V3ConfigError("non-analytics V3 sources must deny network access")
     return NetworkPolicyConfig(

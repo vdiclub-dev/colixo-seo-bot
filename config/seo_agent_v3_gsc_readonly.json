@@ -24,7 +24,7 @@
     "rank_opportunity": 1.2,
     "commercial_fit": 1.4,
     "conversion_signal": 1.2,
-    "competitive_gap": 1.0,
+    "competitive_gap": 1,
     "reputation_gap": 0.8,
     "evidence_confidence": 1.2
   },
@@ -34,8 +34,8 @@
     "strong_min_known_dimensions": 4
   },
   "phase_1_sources": {
-    "search_console": "local_fixture",
-    "analytics": "ga4_data_api",
+    "search_console": "gsc_search_analytics_api",
+    "analytics": "local_fixture",
     "rank_tracker": "local_fixture",
     "competitors": "local_fixture",
     "reviews": "local_fixture",
@@ -44,8 +44,8 @@
   "network_policy": {
     "default": "deny",
     "sources": {
-      "search_console": "deny",
-      "analytics": "allow",
+      "search_console": "allow",
+      "analytics": "deny",
       "rank_tracker": "deny",
       "competitors": "deny",
       "reviews": "deny",
@@ -53,7 +53,7 @@
     }
   },
   "ga4_data_api": {
-    "enabled": true,
+    "enabled": false,
     "property_id": "552715460",
     "resource": "properties/552715460",
     "channel": "Organic Search",
@@ -70,8 +70,13 @@
     },
     "unmapped_and_legal_pages": "exclude_from_commercial_signals"
   },
+  "privacy": {
+    "aggregated_only": true,
+    "personal_data_allowed": false,
+    "full_review_text_allowed": false
+  },
   "gsc_search_analytics": {
-    "enabled": false,
+    "enabled": true,
     "property": "sc-domain:colixo.ch",
     "type": "web",
     "data_state": "final",
@@ -84,10 +89,5 @@
     "pii": "exclude",
     "pagination": "disabled",
     "totals_scope": "returned_query_rows_non_exhaustive"
-  },
-  "privacy": {
-    "aggregated_only": true,
-    "personal_data_allowed": false,
-    "full_review_text_allowed": false
   }
 }

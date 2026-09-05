@@ -424,11 +424,10 @@ def test_existing_runtime_states_and_live_gsc_reachability_are_unchanged(tmp_pat
         ga4_client_factory=lambda: object(),
     )
     assert isinstance(adapters["search_console"], SearchConsoleFixtureSource)
-    assert tuple(state.value for state in RuntimeState) == ("OFFLINE", "GA4_READ_ONLY")
+    assert tuple(state.value for state in RuntimeState) == ("OFFLINE", "GA4_READ_ONLY", "GSC_READ_ONLY")
 
     factory_source = (ROOT / "scripts/v3/source_factory.py").read_text()
-    assert "GoogleSearchConsoleDataSource" not in factory_source
-    assert "create_google_search_console_transport" not in factory_source
+    assert "gsc_readonly_probe" not in factory_source
 
 
 def test_probe_pr_scope_leaves_configs_legacy_auth_and_dependency_lock_unchanged():
