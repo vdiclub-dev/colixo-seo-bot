@@ -450,13 +450,12 @@ def test_current_runtimes_and_search_console_factory_remain_unchanged(tmp_path):
     assert isinstance(adapters["search_console"], SearchConsoleFixtureSource)
 
 
-def test_live_search_console_source_is_unreachable_from_runtime_factory():
-    factory_source = (ROOT / "scripts/v3/source_factory.py").read_text()
-    config_source = (ROOT / "scripts/v3/config.py").read_text()
-    assert "GoogleSearchConsoleDataSource" not in factory_source
-    assert "create_google_search_console_transport" not in factory_source
-    assert "GSC_READ_ONLY" not in config_source
-    assert tuple(state.value for state in RuntimeState) == ("OFFLINE", "GA4_READ_ONLY")
+def test_live_search_console_source_is_unreachable_from_default_runtime():
+    config = load_v3_config()
+    assert config.runtime_state is RuntimeState.OFFLINE
+    assert config.gsc_search_analytics.enabled is False
+    assert isinstance(build_source_adapters(config)["search_console"], SearchConsoleFixtureSource)
+    assert tuple(state.value for state in RuntimeState) == ("OFFLINE", "GA4_READ_ONLY", "GSC_READ_ONLY")
 
 
 def test_v3_search_console_source_remains_isolated_from_legacy_v2_auth():

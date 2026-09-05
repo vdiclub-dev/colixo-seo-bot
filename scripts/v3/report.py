@@ -97,7 +97,8 @@ def render_markdown(
         rendered_modes = []
         for name, mode in sorted(source_modes.items()):
             rendered_mode = (
-                "ga4_data_api(read-only)" if mode == "ga4_data_api" else mode
+                mode + "(read-only)"
+                if mode in {"ga4_data_api", "gsc_search_analytics_api"} else mode
             )
             rendered_modes.append("{}={}".format(name, rendered_mode))
         provenance_lines.extend(

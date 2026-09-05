@@ -1,4 +1,4 @@
-"""Authorized orchestration for the V3 offline and GA4 read-only states."""
+"""Authorized orchestration for offline and isolated read-only source states."""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,7 +8,9 @@ from .config import V3Config, load_v3_config
 from .models import OpportunityScore, Recommendation
 from .report import render_markdown
 from .scoring import recommendation_for, score_opportunity
-from .source_factory import build_source_adapters, source_modes
+from .source_factory import (
+    build_source_adapters, source_modes, GSCReadOnlyRuntimeAdapter, GSCRuntimeCoverage,
+)
 
 
 @dataclass(frozen=True)
@@ -18,6 +20,7 @@ class AgentResult:
     markdown: str
     source_counts: Mapping[str, int]
     source_modes: Mapping[str, str]
+    gsc_coverage: Optional[GSCRuntimeCoverage] = None
 
 
 class MarketIntelligenceAgent:
@@ -29,6 +32,7 @@ class MarketIntelligenceAgent:
         *,
         observed_at: Optional[str] = None,
         ga4_client_factory: Optional[Callable[[], Any]] = None,
+        gsc_transport_factory: Optional[Callable[[], Any]] = None,
     ) -> None:
         self.config: V3Config = load_v3_config(config_path)
         self.source_modes = source_modes(self.config)
@@ -36,6 +40,7 @@ class MarketIntelligenceAgent:
             self.config,
             observed_at=observed_at,
             ga4_client_factory=ga4_client_factory,
+            gsc_transport_factory=gsc_transport_factory,
         )
 
     def run(self, fixtures: Mapping[str, Any]) -> AgentResult:
@@ -94,5 +99,8 @@ class MarketIntelligenceAgent:
                 self.source_modes,
             ),
             source_counts=source_counts,
-            source_modes=self.source_modes,
+            source_modes=dict(self.source_modes),
+            gsc_coverage=(self.adapters["search_console"].coverage
+                          if isinstance(self.adapters["search_console"], GSCReadOnlyRuntimeAdapter)
+                          else None),
         )

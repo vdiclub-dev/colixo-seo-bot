@@ -70,6 +70,21 @@
     },
     "unmapped_and_legal_pages": "exclude_from_commercial_signals"
   },
+  "gsc_search_analytics": {
+    "enabled": false,
+    "property": "sc-domain:colixo.ch",
+    "type": "web",
+    "data_state": "final",
+    "dimension": "query",
+    "row_limit": 25000,
+    "start_offset_days": 28,
+    "end_offset_days": 3,
+    "brand": "coverage_only",
+    "unmapped": "coverage_only",
+    "pii": "exclude",
+    "pagination": "disabled",
+    "totals_scope": "returned_query_rows_non_exhaustive"
+  },
   "privacy": {
     "aggregated_only": true,
     "personal_data_allowed": false,

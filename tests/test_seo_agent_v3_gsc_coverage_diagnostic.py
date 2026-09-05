@@ -225,11 +225,10 @@ def test_workflow_security_contract():
         assert forbidden not in workflow
 
 
-def test_runtime_stays_offline_and_gsc_unreachable():
-    assert tuple(s.value for s in RuntimeState) == ("OFFLINE", "GA4_READ_ONLY")
+def test_default_runtime_stays_offline_and_diagnostic_is_not_a_runtime_adapter():
+    assert tuple(s.value for s in RuntimeState) == ("OFFLINE", "GA4_READ_ONLY", "GSC_READ_ONLY")
     config = load_v3_config()
     assert config.runtime_state is RuntimeState.OFFLINE
     assert isinstance(build_source_adapters(config)["search_console"], SearchConsoleFixtureSource)
     factory = (ROOT / "scripts/v3/source_factory.py").read_text()
-    assert "GoogleSearchConsoleDataSource" not in factory
     assert "gsc_coverage_diagnostic" not in factory
