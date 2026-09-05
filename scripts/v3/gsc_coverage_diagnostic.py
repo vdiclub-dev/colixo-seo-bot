@@ -24,11 +24,12 @@ SAFE_FAILURE_CODES = (
     "REPORT_COUNT_INVALID", "REPORT_RENDER_FAILED", "UNEXPECTED_DIAGNOSTIC_FAILURE",
 )
 COUNT_FIELDS = (
-    "raw_row_count", "accepted_signal_count", "unmapped_row_count",
+    "raw_row_count", "accepted_signal_count", "brand_row_count", "unmapped_row_count",
     "pii_filtered_row_count",
 )
 METRIC_FIELDS = (
     "all_rows_clicks", "all_rows_impressions", "accepted_clicks", "accepted_impressions",
+    "brand_clicks", "brand_impressions",
 )
 
 

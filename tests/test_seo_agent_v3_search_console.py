@@ -18,11 +18,61 @@ from scripts.v3.sources.search_console import (
     GoogleSearchConsoleDataSource,
     SearchConsoleFixtureSource,
     classify_search_query_topic,
+    is_brand_query,
     create_google_search_console_transport,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("entreprise livraison geneve", "business_delivery"),
+    ("entreprise de livraison de colis", "business_delivery"),
+    ("entreprise de livraison de colis autour de moi", "business_delivery"),
+    ("livraison entreprise", "business_delivery"),
+    ("service de livraison pour entreprise", "business_delivery"),
+    ("transport pour entreprise", "business_delivery"),
+    ("livraison b2b", "business_delivery"),
+    ("PROFESSIONNELS : coursier, Genève", "business_delivery"),
+    ("entreprises colis Lausanne", "business_delivery"),
+    ("professionnel livrer", "business_delivery"),
+    ("entreprise peinture geneve", None), ("creation entreprise", None),
+    ("emploi entreprise transport", None),
+    ("livraison colis", "parcel_delivery"), ("transport de colis", "parcel_delivery"),
+    ("envoi de colis", "parcel_delivery"),
+    ("service livraison colis suisse", "parcel_delivery"),
+    ("colis à livrer Genève", "parcel_delivery"),
+    ("suivi colis", None), ("taille colis", None), ("carton colis", None),
+    ("livraison pizza", None), ("livraison fleurs", None), ("livraison repas", None),
+    ("vins de Genève envoi", "wine_delivery"), ("vin livraison", "wine_delivery"),
+    ("transport de vins entreprise colis", "wine_delivery"),
+    ("histoire du vin", None), ("prix vins", None), ("livraison vinaigre", None),
+    ("montres Genève transport", "secure_watch_delivery"),
+    ("horlogerie envoi entreprise vins colis", "secure_watch_delivery"),
+    ("montre sécurisée", "secure_watch_delivery"),
+    ("envoi sécurisé", "secure_watch_delivery"),
+    ("livraison sécurisée", "secure_watch_delivery"),
+    ("histoire horlogerie", None), ("prix montre", None),
+    ("transport montreal", None), ("livraison entreprisette", None),
+    ("livraison colissimo", None), ("livraison express", "general_delivery"),
+    ("COLIXO livraison entreprise", None),
+    ("livraison colis sample@example.test", None),
+    ("colixo +41 79 123 45 67 livraison colis", None),
+])
+def test_token_intent_rules_and_priority(query, expected):
+    assert classify_search_query_topic(query) == expected
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("colixo", True), ("colixo livraison", True), ("www colixo", True),
+    ("WWW.COLIXO.CH", True), ("Cólixo!", True),
+    ("colixophile", False), ("mycolixo", False), ("", False),
+])
+def test_standalone_brand_detection(query, expected):
+    assert is_brand_query(query) is expected
+    if expected:
+        assert classify_search_query_topic(query) is None
 
 
 class FakeResponse:
