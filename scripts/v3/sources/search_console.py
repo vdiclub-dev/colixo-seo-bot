@@ -39,10 +39,14 @@ class GSCCollectionCoverage:
     all_rows_impressions: Decimal
     accepted_clicks: Decimal
     accepted_impressions: Decimal
+    brand_row_count: int = 0
+    brand_clicks: Decimal = Decimal(0)
+    brand_impressions: Decimal = Decimal(0)
 
     def __post_init__(self) -> None:
         if self.raw_row_count != (
             self.accepted_signal_count
+            + self.brand_row_count
             + self.unmapped_row_count
             + self.pii_filtered_row_count
         ):
@@ -140,14 +144,38 @@ def classify_search_query_topic(query: str) -> Optional[str]:
     """Return a reviewable commercial topic, or ``None`` for unknown intent."""
 
     normalized = _normalize_query(query)
-    if not normalized or _contains_obvious_pii(query):
+    if not normalized or _contains_obvious_pii(query) or is_brand_query(query):
         return None
+    tokens = set(normalized.split())
+    # Hiring intent is not a request for transport services.
+    if tokens & {"emploi", "emplois", "recrutement", "stage", "stages"}:
+        return None
+    intent_rules = {
+        "secure_watch_delivery": (
+            {"horlogerie", "montre", "montres"},
+            {"livraison", "transport", "envoi", "securise", "securisee"},
+        ),
+        "wine_delivery": ({"vin", "vins"}, {"livraison", "transport", "envoi"}),
+        "business_delivery": (
+            {"entreprise", "entreprises", "professionnel", "professionnels", "b2b"},
+            {"livraison", "livrer", "transport", "colis", "coursier"},
+        ),
+        "parcel_delivery": ({"colis"}, {"livraison", "livrer", "transport", "envoi"}),
+    }
     for topic, phrases in _TOPIC_PHRASES:
-        if any(_contains_phrase(normalized, phrase) for phrase in phrases):
+        subjects, actions = intent_rules[topic]
+        if (tokens & subjects and tokens & actions) or any(
+            _contains_phrase(normalized, phrase) for phrase in phrases
+        ):
             return topic
     if normalized in _GENERAL_DELIVERY_QUERIES:
         return "general_delivery"
     return None
+
+
+def is_brand_query(query: str) -> bool:
+    """Detect standalone brand navigation independently of word order."""
+    return "colixo" in _normalize_query(query).split()
 
 
 def create_google_search_console_transport() -> Any:
@@ -217,6 +245,8 @@ class GoogleSearchConsoleDataSource:
         raw_row_count = unmapped_row_count = pii_filtered_row_count = 0
         all_rows_clicks = all_rows_impressions = Decimal(0)
         accepted_clicks = accepted_impressions = Decimal(0)
+        brand_row_count = 0
+        brand_clicks = brand_impressions = Decimal(0)
         for row in rows:
             query, clicks, impressions, ctr, position = self._parse_row(row)
             raw_row_count += 1
@@ -224,6 +254,11 @@ class GoogleSearchConsoleDataSource:
             all_rows_impressions += impressions
             if _contains_obvious_pii(query):
                 pii_filtered_row_count += 1
+                continue
+            if is_brand_query(query):
+                brand_row_count += 1
+                brand_clicks += clicks
+                brand_impressions += impressions
                 continue
             topic = classify_search_query_topic(query)
             if topic is None:
@@ -270,6 +305,9 @@ class GoogleSearchConsoleDataSource:
                 all_rows_impressions=all_rows_impressions,
                 accepted_clicks=accepted_clicks,
                 accepted_impressions=accepted_impressions,
+                brand_row_count=brand_row_count,
+                brand_clicks=brand_clicks,
+                brand_impressions=brand_impressions,
             ),
         )
 

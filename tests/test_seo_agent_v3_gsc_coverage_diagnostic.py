@@ -57,7 +57,7 @@ def test_empty_success(payload):
     status, output, calls = execute(payload)
     assert status == 0 and calls == 1
     values = dict(line.split("=", 1) for line in output.splitlines())
-    assert len(values) == 15
+    assert len(values) == 18
     assert values["OBSERVED_AT"] == "2026-09-05"
     assert values["DATE_RANGE_START"] == "2026-08-08"
     assert values["DATE_RANGE_END"] == "2026-09-02"
@@ -68,6 +68,7 @@ def test_empty_success(payload):
 @pytest.mark.parametrize("query,field", [
     ("livraison colis", "ACCEPTED_SIGNAL_COUNT"),
     ("weather forecast", "UNMAPPED_ROW_COUNT"),
+    ("colixo livraison", "BRAND_ROW_COUNT"),
     ("sample@example.test", "PII_FILTERED_ROW_COUNT"),
     ("+41 79 123 45 67", "PII_FILTERED_ROW_COUNT"),
 ])
@@ -87,9 +88,10 @@ def test_mixed_exact_output_and_privacy():
     assert output.splitlines() == [
         "PROPERTY=sc-domain:colixo.ch", "AUTH_MODE=WIF", "OBSERVED_AT=2026-09-05",
         "DATE_RANGE_START=2026-08-08", "DATE_RANGE_END=2026-09-02", "GSC_API_CALLS=1",
-        "RAW_ROW_COUNT=4", "ACCEPTED_SIGNAL_COUNT=1", "UNMAPPED_ROW_COUNT=1",
+        "RAW_ROW_COUNT=4", "ACCEPTED_SIGNAL_COUNT=1", "BRAND_ROW_COUNT=0", "UNMAPPED_ROW_COUNT=1",
         "PII_FILTERED_ROW_COUNT=2", "ALL_ROWS_CLICKS=1", "ALL_ROWS_IMPRESSIONS=101",
         "ACCEPTED_CLICKS=0.1", "ACCEPTED_IMPRESSIONS=10.1",
+        "BRAND_CLICKS=0", "BRAND_IMPRESSIONS=0",
         "FINAL_VERDICT=V3_GSC_COVERAGE_DIAGNOSTIC_PASS",
     ]
 
@@ -117,6 +119,28 @@ def test_transport_construction_failure():
                            transport_factory=fail, emit=output.append) == 1
     assert output == ["SAFE_FAILURE_CODE=TRANSPORT_CREATION_FAILED\nGSC_API_CALLS_COMPLETED=0\n"
                       "FINAL_VERDICT=V3_GSC_COVERAGE_DIAGNOSTIC_FAILED"]
+
+
+def test_mixed_brand_diagnostic_is_aggregate_only():
+    status, output, calls = execute({"rows": [
+        row("colixo livraison", "0.1", "10.1"), row("www colixo", "0.2", "20.2"),
+        row("entreprise de livraison de colis", "0.3", "30.3"),
+        row("weather forecast", "0.4", "40.4"),
+        row("colixo sample@example.test", "0.5", "50.5"),
+        row("colixo +41 79 123 45 67", "0.6", "60.6"),
+    ]})
+    assert status == 0 and calls == 1
+    assert output.splitlines() == [
+        "PROPERTY=sc-domain:colixo.ch", "AUTH_MODE=WIF", "OBSERVED_AT=2026-09-05",
+        "DATE_RANGE_START=2026-08-08", "DATE_RANGE_END=2026-09-02", "GSC_API_CALLS=1",
+        "RAW_ROW_COUNT=6", "ACCEPTED_SIGNAL_COUNT=1", "BRAND_ROW_COUNT=2",
+        "UNMAPPED_ROW_COUNT=1", "PII_FILTERED_ROW_COUNT=2",
+        "ALL_ROWS_CLICKS=2.1", "ALL_ROWS_IMPRESSIONS=212.1",
+        "ACCEPTED_CLICKS=0.3", "ACCEPTED_IMPRESSIONS=30.3",
+        "BRAND_CLICKS=0.3", "BRAND_IMPRESSIONS=30.3",
+        "FINAL_VERDICT=V3_GSC_COVERAGE_DIAGNOSTIC_PASS",
+    ]
+    assert "CTR" not in output and "POSITION" not in output
 
 
 def test_shared_guard_forbids_second_post():
@@ -158,6 +182,7 @@ def test_unknown_failure_code_is_never_exposed():
 @pytest.mark.parametrize("mutation,code", [
     (("raw_row_count", 1), "COVERAGE_INVARIANT_INVALID"),
     (("raw_row_count", True), "COVERAGE_INVARIANT_INVALID"),
+    (("brand_row_count", 1), "COVERAGE_INVARIANT_INVALID"),
     (("all_rows_clicks", Decimal("NaN")), "REPORT_RENDER_FAILED"),
     (("all_rows_impressions", Decimal("Infinity")), "REPORT_RENDER_FAILED"),
     (("accepted_clicks", Decimal(-1)), "REPORT_RENDER_FAILED"),

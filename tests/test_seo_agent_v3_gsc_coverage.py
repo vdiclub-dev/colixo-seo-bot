@@ -98,6 +98,7 @@ def test_mixed_rows_have_exact_partition_and_decimal_totals():
     )
     assert result.coverage.raw_row_count == (
         result.coverage.accepted_signal_count + result.coverage.unmapped_row_count
+        + result.coverage.brand_row_count
         + result.coverage.pii_filtered_row_count
     )
     assert len(transport.calls) == 1
@@ -116,6 +117,7 @@ def test_coverage_and_result_are_frozen_and_only_have_permitted_fields():
         "raw_row_count", "accepted_signal_count", "unmapped_row_count",
         "pii_filtered_row_count", "all_rows_clicks", "all_rows_impressions",
         "accepted_clicks", "accepted_impressions",
+        "brand_row_count", "brand_clicks", "brand_impressions",
     }
     assert all(type(value) in (int, Decimal)
                for value in asdict(result.coverage).values())
@@ -131,6 +133,44 @@ def test_invalid_partition_fails_closed():
     adapter, _ = source({})
     with pytest.raises(GSCDataSourceError, match="coverage invariant"):
         replace(adapter.collect_with_coverage().coverage, raw_row_count=1)
+
+
+def test_brand_partition_metrics_and_pii_precedence():
+    rows = [row("colixo", "0.1", "10.1"), row("colixo livraison", "0.2", "20.2"),
+            row("www colixo", "0.3", "30.3"), row("livraison colis", "0.4", "40.4"),
+            row("weather forecast", "0.5", "50.5"),
+            row("colixo sample@example.test", "0.6", "60.6"),
+            row("colixo +41 79 123 45 67", "0.7", "70.7")]
+    adapter, transport = source({"rows": rows})
+    result = adapter.collect_with_coverage()
+    assert result.coverage == GSCCollectionCoverage(
+        raw_row_count=7, accepted_signal_count=1, unmapped_row_count=1,
+        pii_filtered_row_count=2, all_rows_clicks=Decimal("2.8"),
+        all_rows_impressions=Decimal("282.8"), accepted_clicks=Decimal("0.4"),
+        accepted_impressions=Decimal("40.4"), brand_row_count=3,
+        brand_clicks=Decimal("0.6"), brand_impressions=Decimal("60.6"),
+    )
+    assert len(transport.calls) == 1
+    assert len(result.signals) == 1
+    assert "colixo" not in repr(result.coverage)
+    assert [signal.query for signal in result.signals] == ["livraison colis"]
+    for excluded in ("colixo livraison", "www colixo", "sample@example.test", "+41 79 123 45 67", "weather forecast"):
+        assert excluded not in repr(result)
+    legacy, _ = source({"rows": rows})
+    assert legacy.collect() == result.signals
+    with pytest.raises(GSCDataSourceError, match="coverage invariant"):
+        replace(result.coverage, brand_row_count=0)
+
+
+@pytest.mark.parametrize("query", ["colixo", "colixo livraison", "www colixo"])
+def test_brand_only_never_creates_signal(query):
+    adapter, _ = source({"rows": [row(query)]})
+    result = adapter.collect_with_coverage()
+    assert result.signals == ()
+    assert result.coverage.brand_row_count == result.coverage.raw_row_count == 1
+    assert result.coverage.unmapped_row_count == 0
+    assert result.coverage.brand_clicks == Decimal("0.1")
+    assert result.coverage.brand_impressions == Decimal("10.2")
 
 
 def test_collect_preserves_signals_evidence_and_shares_coverage_semantics(monkeypatch):
